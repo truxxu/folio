@@ -1,6 +1,6 @@
 import type { Currency } from "./types";
 
-export function formatMoney(value: number, currency: Currency): string {
+function moneyFormat(value: number, currency: Currency): Intl.NumberFormat {
   const isCop = currency === "cop";
   const small = value !== 0 && Math.abs(value) < 1;
   return new Intl.NumberFormat(isCop ? "es-CO" : "en-US", {
@@ -8,7 +8,20 @@ export function formatMoney(value: number, currency: Currency): string {
     currency: currency.toUpperCase(),
     minimumFractionDigits: isCop ? 0 : 2,
     maximumFractionDigits: isCop ? (small ? 2 : 0) : small ? 6 : 2,
-  }).format(value);
+  });
+}
+
+export function formatMoney(value: number, currency: Currency): string {
+  return moneyFormat(value, currency).format(value);
+}
+
+// Splits "$44,405.91" into ["$44,405", ".91"] so the cents can be styled separately.
+export function formatMoneyParts(value: number, currency: Currency): [string, string] {
+  const parts = moneyFormat(value, currency).formatToParts(value);
+  const at = parts.findIndex((p) => p.type === "decimal");
+  if (at === -1) return [parts.map((p) => p.value).join(""), ""];
+  const join = (ps: Intl.NumberFormatPart[]) => ps.map((p) => p.value).join("");
+  return [join(parts.slice(0, at)), join(parts.slice(at))];
 }
 
 export function formatAmount(amount: number): string {

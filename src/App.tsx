@@ -1,7 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { AddHolding } from "./AddHolding";
+import { coinColor, Tile } from "./Tile";
 import { fetchPrices } from "./api";
-import { amountToInput, formatAmount, formatMoney, formatPercent, parseAmount, timeAgo } from "./format";
+import {
+  amountToInput,
+  formatAmount,
+  formatMoney,
+  formatMoneyParts,
+  formatPercent,
+  parseAmount,
+  timeAgo,
+} from "./format";
 import {
   exportBackup,
   loadPrices,
@@ -14,7 +32,6 @@ import {
 import type { AppState, Currency, Holding, PriceCache } from "./types";
 
 const REFRESH_MS = 5 * 60_000;
-const PALETTE = ["#E8930C", "#4A6FA5", "#2A9D8F", "#7B6CB0", "#C46A86", "#8A9A3B", "#4BA3C7", "#8892A0"];
 
 type Row = Holding & { price: number | null; change: number | null; value: number | null; color: string };
 
@@ -105,7 +122,7 @@ export default function App() {
       return { ...h, price, change, value: price === null ? null : price * h.amount, color: "" };
     });
     list.sort((a, b) => (b.value ?? -1) - (a.value ?? -1));
-    return list.map((r, i) => ({ ...r, color: PALETTE[Math.min(i, PALETTE.length - 1)] }));
+    return list.map((r, i) => ({ ...r, color: coinColor(i) }));
   }, [state.holdings, prices, cur]);
 
   const total = rows.reduce((s, r) => s + (r.value ?? 0), 0);
@@ -125,7 +142,9 @@ export default function App() {
   const setAmount = (id: string, amount: number) =>
     update((hs) => hs.map((h) => (h.id === id ? { ...h, amount } : h)));
   const remove = (h: Holding) => {
-    if (confirm(`Remove ${h.name} from your portfolio?`)) update((hs) => hs.filter((x) => x.id !== h.id));
+    if (!confirm(`Remove ${h.name} from your portfolio?`)) return;
+    update((hs) => hs.filter((x) => x.id !== h.id));
+    if (state.holdings.length === 1) setEditing(false);
   };
   const setCurrency = (currency: Currency) => setState((s) => ({ ...s, currency }));
 
@@ -143,18 +162,19 @@ export default function App() {
     }
   }
 
-  const importControl = (text: string) => (
-    <label className="link">
-      {text}
+  const importControl = (className: string, children: ReactNode) => (
+    <label className={className}>
+      {children}
       <input type="file" accept="application/json,.json" className="visually-hidden" onChange={importFile} />
     </label>
   );
 
   if (state.holdings.length === 0) {
     return (
-      <main className="app">
+      <main className="app first-run">
+        <div className="glow" aria-hidden />
         <header className="top">
-          <span className="brand">Folio</span>
+          <Brand />
         </header>
         <section className="welcome">
           <h1>What do you hold?</h1>
@@ -163,11 +183,50 @@ export default function App() {
             look up prices.
           </p>
         </section>
-        <AddHolding existingIds={[]} onAdd={addHolding} />
-        <footer className="footer">
-          {importControl("Restore from a backup file")}
+        <AddHolding variant="inline" existingIds={[]} currency={cur} prices={prices?.data} onAdd={addHolding} />
+        <footer className="restore">
+          {importControl("text-btn mono", "↑ Restore from a backup file")}
           {notice && <span role="status">{notice}</span>}
         </footer>
+      </main>
+    );
+  }
+
+  if (editing) {
+    return (
+      <main className="app">
+        <header className="top">
+          <h1 className="title">Edit amounts</h1>
+          <button type="button" className="pill-btn" onClick={() => setEditing(false)}>
+            Done
+          </button>
+        </header>
+        <ul className="card">
+          {rows.map((r) => (
+            <EditRow key={r.id} row={r} onSave={(n) => setAmount(r.id, n)} onRemove={() => remove(r)} />
+          ))}
+        </ul>
+
+        <h2 className="label section">Backup</h2>
+        <div className="card">
+          <button type="button" className="card-row" onClick={() => exportBackup(state)}>
+            <span>Export backup</span>
+            <span className="mono muted">↓ .json</span>
+          </button>
+          {importControl(
+            "card-row",
+            <>
+              <span>Import backup</span>
+              <span className="mono muted">↑ .json</span>
+            </>,
+          )}
+        </div>
+        <p className="note mono">Amounts stay on this device.</p>
+        {notice && (
+          <p className="note mono" role="status">
+            {notice}
+          </p>
+        )}
       </main>
     );
   }
@@ -177,17 +236,24 @@ export default function App() {
   else if (error && prices) status = `${error} Showing prices from ${timeAgo(prices.fetchedAt)}.`;
   else if (error) status = error;
   else if (!online && prices) status = `Offline. Showing prices from ${timeAgo(prices.fetchedAt)}.`;
+  else if (!online) status = "Offline. Prices will load when you're back online.";
   else if (prices) status = `Prices updated ${timeAgo(prices.fetchedAt)}`;
   else status = "";
 
+  // Prices on screen may be out of date: show a banner instead of the quiet status line.
+  const stale = !loading && (!online || !!error);
+
   const valued = rows.filter((r) => r.value);
-  const allocLabel = valued.map((r) => `${r.symbol} ${((r.value! / total) * 100).toFixed(0)}%`).join(", ");
+  const share = (r: Row) => Math.round((r.value! / total) * 100);
+  const allocLabel = valued.map((r) => `${r.symbol} ${share(r)}%`).join(", ");
+  const [whole, cents] = formatMoneyParts(total, cur);
+  const delta = total - previous;
 
   return (
-    <main className="app">
+    <main className={`app with-bar${stale ? " stale" : ""}`}>
       <header className="top">
-        <span className="brand">Folio</span>
-        <div className="toggle" role="group" aria-label="Currency">
+        <Brand />
+        <div className="toggle mono" role="group" aria-label="Currency">
           {(["usd", "cop"] as const).map((c) => (
             <button key={c} type="button" aria-pressed={cur === c} onClick={() => setCurrency(c)}>
               {c.toUpperCase()}
@@ -196,104 +262,189 @@ export default function App() {
         </div>
       </header>
 
+      {stale && (
+        <p className={`banner mono ${error ? "bad" : "warn"}`} role="status">
+          <span className="dot" aria-hidden />
+          {status}
+        </p>
+      )}
+
       <section className="summary" aria-live="polite">
-        <p className="total">{prices ? formatMoney(total, cur) : "—"}</p>
-        {totalChange !== null && (
-          <p className={`change ${totalChange >= 0 ? "up" : "down"}`}>{formatPercent(totalChange)} in 24 h</p>
+        <p className="label">Total balance</p>
+        <p className="total">
+          {prices ? (
+            <>
+              {whole}
+              <span className="cents">{cents}</span>
+            </>
+          ) : (
+            "—"
+          )}
+        </p>
+        {totalChange !== null &&
+          (stale ? (
+            <p className="delta mono">{formatPercent(totalChange)} in 24 h · cached</p>
+          ) : (
+            <p className="delta mono">
+              <span className={`chip ${totalChange >= 0 ? "up" : "down"}`}>
+                {totalChange >= 0 ? "▲" : "▼"} {formatPercent(totalChange)}
+              </span>
+              <span>
+                {delta >= 0 ? "+" : "−"}
+                {formatMoney(Math.abs(delta), cur)} in 24 h
+              </span>
+            </p>
+          ))}
+        {total > 0 && !stale && (
+          <>
+            <div className="alloc" role="img" aria-label={`Allocation: ${allocLabel}`}>
+              {valued.map((r) => (
+                <span key={r.id} style={{ flexGrow: r.value!, "--coin": r.color } as CSSProperties} />
+              ))}
+            </div>
+            <ul className="legend mono" aria-hidden>
+              {valued.map((r) => (
+                <li key={r.id} style={{ "--coin": r.color } as CSSProperties}>
+                  {r.symbol} {share(r)}%
+                </li>
+              ))}
+            </ul>
+          </>
         )}
-        {total > 0 && (
-          <div className="alloc" role="img" aria-label={`Allocation: ${allocLabel}`}>
-            {valued.map((r) => (
-              <span key={r.id} style={{ flexGrow: r.value!, background: r.color }} />
-            ))}
+        {!stale && (
+          <div className="status mono">
+            <span className={error ? "error" : loading ? "busy" : undefined}>
+              <span className="dot" aria-hidden />
+              {status}
+            </span>
+            <button type="button" className="ghost-btn" onClick={refresh} disabled={loading || !online}>
+              ↻ Refresh
+            </button>
           </div>
         )}
-        <p className="status">
-          <span className={error ? "error" : undefined}>{status}</span>
-          <button type="button" className="link" onClick={refresh} disabled={loading || !online}>
-            Refresh
-          </button>
-        </p>
       </section>
 
-      <ul className="holdings">
-        {rows.map((r) => (
-          <li key={r.id} className="row">
-            <span className="dot" style={{ background: r.value ? r.color : "var(--line)" }} aria-hidden />
-            <div className="coin">
-              <strong>{r.name}</strong>
-              <span>
-                {formatAmount(r.amount)} {r.symbol}
-              </span>
-            </div>
-            {editing ? (
-              <div className="edit">
-                <AmountInput holding={r} onSave={(n) => setAmount(r.id, n)} />
-                <button type="button" className="link danger" onClick={() => remove(r)}>
-                  Remove
-                </button>
+      <section className="card holdings">
+        <h2 className="card-head label">
+          <span>Holdings</span>
+          <span>
+            {rows.length} coin{rows.length === 1 ? "" : "s"}
+          </span>
+        </h2>
+        <ul>
+          {rows.map((r) => (
+            <li key={r.id} className="row">
+              <Tile symbol={r.symbol} color={r.value ? r.color : undefined} />
+              <div className="coin">
+                <strong>{r.name}</strong>
+                <span className="mono">
+                  {formatAmount(r.amount)} {r.symbol}
+                </span>
               </div>
-            ) : (
-              <div className="value">
+              <div className="value mono">
                 <strong>{r.value === null ? "No price yet" : formatMoney(r.value, cur)}</strong>
                 {r.price !== null && (
                   <span>
                     {formatMoney(r.price, cur)}
-                    {r.change !== null && (
+                    {r.change !== null && !stale && (
                       <em className={r.change >= 0 ? "up" : "down"}> {formatPercent(r.change)}</em>
                     )}
                   </span>
                 )}
               </div>
-            )}
-          </li>
-        ))}
-      </ul>
+            </li>
+          ))}
+        </ul>
+      </section>
 
-      {adding ? (
-        <AddHolding existingIds={state.holdings.map((h) => h.id)} onAdd={addHolding} onCancel={() => setAdding(false)} />
-      ) : (
-        <div className="actions">
-          <button type="button" className="btn primary" onClick={() => setAdding(true)}>
-            Add coin
+      <div className="bar">
+        {stale && !online ? (
+          <button type="button" className="btn wide" disabled>
+            ↻ Refresh when online
           </button>
-          <button type="button" className="btn" onClick={() => setEditing((v) => !v)}>
-            {editing ? "Done" : "Edit amounts"}
+        ) : (
+          <button type="button" className="btn primary wide" onClick={() => setAdding(true)}>
+            <span className="plus">+</span> Add coin
           </button>
-        </div>
-      )}
-
-      <footer className="footer">
-        <button type="button" className="link" onClick={() => exportBackup(state)}>
-          Export backup
+        )}
+        <button type="button" className="btn" onClick={() => setEditing(true)}>
+          Edit
         </button>
-        {importControl("Import backup")}
-        {notice && <span role="status">{notice}</span>}
-      </footer>
+      </div>
+
+      {adding && (
+        <AddHolding
+          variant="sheet"
+          existingIds={state.holdings.map((h) => h.id)}
+          currency={cur}
+          prices={prices?.data}
+          onAdd={addHolding}
+          onCancel={() => setAdding(false)}
+        />
+      )}
     </main>
   );
 }
 
-function AmountInput({ holding, onSave }: { holding: Holding; onSave: (n: number) => void }) {
+function Brand() {
+  return (
+    <span className="brand">
+      <span className="logo" aria-hidden>
+        <span />
+        <span />
+        <span />
+      </span>
+      Folio
+    </span>
+  );
+}
+
+function EditRow({ row, onSave, onRemove }: { row: Row; onSave: (n: number) => void; onRemove: () => void }) {
+  const [invalid, setInvalid] = useState(false);
+  return (
+    <li className="row edit-row">
+      <Tile symbol={row.symbol} color={row.value ? row.color : undefined} />
+      <div className="coin">
+        <strong>{row.name}</strong>
+        <span className={`mono${invalid ? " error" : ""}`} id={`amount-hint-${row.id}`}>
+          {invalid ? "Must be above 0" : row.symbol}
+        </span>
+      </div>
+      <AmountInput holding={row} onSave={onSave} onInvalid={setInvalid} />
+      <button type="button" className="remove" aria-label={`Remove ${row.name}`} onClick={onRemove}>
+        ×
+      </button>
+    </li>
+  );
+}
+
+function AmountInput({
+  holding,
+  onSave,
+  onInvalid,
+}: {
+  holding: Holding;
+  onSave: (n: number) => void;
+  onInvalid: (invalid: boolean) => void;
+}) {
   const [draft, setDraft] = useState(() => amountToInput(holding.amount));
   const [invalid, setInvalid] = useState(false);
 
   const commit = () => {
     const n = parseAmount(draft);
-    if (n === null || n <= 0) {
-      setInvalid(true);
-      return;
-    }
-    setInvalid(false);
-    if (n !== holding.amount) onSave(n);
+    const bad = n === null || n <= 0;
+    setInvalid(bad);
+    onInvalid(bad);
+    if (!bad && n !== holding.amount) onSave(n);
   };
 
   return (
     <input
-      className="field"
+      className="field amount-field mono"
       inputMode="decimal"
       aria-label={`Amount of ${holding.name}`}
       aria-invalid={invalid || undefined}
+      aria-describedby={`amount-hint-${holding.id}`}
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}

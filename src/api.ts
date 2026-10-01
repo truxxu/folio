@@ -17,13 +17,13 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export function fetchPrices(ids: string[]): Promise<PriceMap> {
+export function fetchPrices(ids: string[], signal?: AbortSignal): Promise<PriceMap> {
   const params = new URLSearchParams({
     ids: ids.join(","),
     vs_currencies: "usd,cop",
     include_24hr_change: "true",
   });
-  return get<PriceMap>(`/simple/price?${params}`);
+  return get<PriceMap>(`/simple/price?${params}`, signal);
 }
 
 export async function searchCoins(query: string, signal?: AbortSignal): Promise<CoinSearchResult[]> {

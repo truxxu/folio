@@ -18,8 +18,8 @@ export default defineConfig({
         short_name: "Folio",
         description: "A private, offline-friendly crypto portfolio tracker.",
         display: "standalone",
-        background_color: "#EEF1F5",
-        theme_color: "#EEF1F5",
+        background_color: "#0A0E12",
+        theme_color: "#0A0E12",
         icons: [
           { src: "pwa-192.png", sizes: "192x192", type: "image/png" },
           { src: "pwa-512.png", sizes: "512x512", type: "image/png" },
