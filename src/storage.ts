@@ -1,4 +1,4 @@
-import type { AppState, Holding, PriceCache } from "./types";
+import { FIATS, type AppState, type Fiat, type Holding, type PriceCache } from "./types";
 
 const STATE_KEY = "folio:state:v1";
 const PRICE_KEY = "folio:prices:v1";
@@ -50,17 +50,20 @@ export function exportBackup(state: AppState) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+// Backups from before cash/accounts have no `kind`; those are crypto.
 function isHolding(h: unknown): h is Holding {
   if (typeof h !== "object" || h === null) return false;
   const o = h as Record<string, unknown>;
-  return (
+  const base =
     typeof o.id === "string" &&
     typeof o.symbol === "string" &&
     typeof o.name === "string" &&
     typeof o.amount === "number" &&
     Number.isFinite(o.amount) &&
-    o.amount >= 0
-  );
+    o.amount >= 0;
+  if (!base) return false;
+  if (o.kind === undefined || o.kind === "crypto") return true;
+  return (o.kind === "cash" || o.kind === "account") && FIATS.includes(o.fiat as Fiat);
 }
 
 export function parseBackup(text: string): AppState {

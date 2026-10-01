@@ -29,11 +29,21 @@ import {
   savePrices,
   saveState,
 } from "./storage";
-import type { AppState, Currency, Holding, PriceCache } from "./types";
+import { kindOf, type AppState, type Currency, type Holding, type HoldingKind, type PriceCache } from "./types";
+import { holdingPrice } from "./value";
 
 const REFRESH_MS = 5 * 60_000;
 
 type Row = Holding & { price: number | null; change: number | null; value: number | null; color: string };
+
+const GROUPS: [HoldingKind, string][] = [
+  ["crypto", "Crypto"],
+  ["cash", "Cash"],
+  ["account", "Accounts"],
+];
+
+// Short name for the allocation legend: the ticker or currency, or the account's own name.
+const label = (r: Row) => (kindOf(r) === "account" ? (r.name.length > 12 ? `${r.name.slice(0, 11)}…` : r.name) : r.symbol);
 
 export default function App() {
   const [state, setState] = useState<AppState>(loadState);
@@ -59,19 +69,26 @@ export default function App() {
     };
   }, []);
 
+  // CoinGecko ids only; cash and accounts are valued from the fiat rates fetched alongside.
   const ids = useMemo(
-    () => state.holdings.map((h) => h.id).sort().join(","),
+    () =>
+      state.holdings
+        .filter((h) => kindOf(h) === "crypto")
+        .map((h) => h.id)
+        .sort()
+        .join(","),
     [state.holdings],
   );
+  const hasHoldings = state.holdings.length > 0;
 
   const inFlight = useRef(false);
   const refresh = useCallback(async () => {
-    if (!ids || inFlight.current) return;
+    if (!hasHoldings || inFlight.current) return;
     inFlight.current = true;
     setLoading(true);
     setError(null);
     try {
-      const cache = { data: await fetchPrices(ids.split(",")), fetchedAt: Date.now() };
+      const cache = { ...(await fetchPrices(ids ? ids.split(",") : [])), fetchedAt: Date.now() };
       setPrices(cache);
       savePrices(cache);
     } catch (e) {
@@ -80,7 +97,7 @@ export default function App() {
       inFlight.current = false;
       setLoading(false);
     }
-  }, [ids]);
+  }, [ids, hasHoldings]);
 
   // Fetch when the app opens or the set of coins changes, unless the cache is fresh and complete.
   const pricesRef = useRef(prices);
@@ -88,7 +105,7 @@ export default function App() {
   useEffect(() => {
     const cache = pricesRef.current;
     const fresh = cache && Date.now() - cache.fetchedAt < 60_000;
-    const complete = cache && ids.split(",").every((id) => !id || cache.data[id]);
+    const complete = cache?.rates && ids.split(",").every((id) => !id || cache.data[id]);
     if (!(fresh && complete)) refresh();
   }, [ids, refresh]);
 
@@ -116,9 +133,7 @@ export default function App() {
   const cur = state.currency;
   const rows: Row[] = useMemo(() => {
     const list = state.holdings.map((h) => {
-      const p = prices?.data[h.id];
-      const price = p?.[cur] ?? null;
-      const change = p?.[`${cur}_24h_change`] ?? null;
+      const { price, change } = holdingPrice(h, prices, cur);
       return { ...h, price, change, value: price === null ? null : price * h.amount, color: "" };
     });
     list.sort((a, b) => (b.value ?? -1) - (a.value ?? -1));
@@ -156,7 +171,7 @@ export default function App() {
       const restored = parseBackup(await file.text());
       if (state.holdings.length && !confirm("Replace your current holdings with this backup?")) return;
       setState(restored);
-      setNotice(`Restored ${restored.holdings.length} coin${restored.holdings.length === 1 ? "" : "s"}.`);
+      setNotice(`Restored ${restored.holdings.length} holding${restored.holdings.length === 1 ? "" : "s"}.`);
     } catch (err) {
       setNotice(err instanceof Error ? err.message : "Couldn't read that file.");
     }
@@ -179,11 +194,11 @@ export default function App() {
         <section className="welcome">
           <h1>What do you hold?</h1>
           <p>
-            Add each coin and the amount you own. Amounts stay on this device. Only coin names are sent out, to
-            look up prices.
+            Add your coins, cash and accounts with the amount you hold. Amounts stay on this device. Only coin
+            names are sent out, to look up prices.
           </p>
         </section>
-        <AddHolding variant="inline" existingIds={[]} currency={cur} prices={prices?.data} onAdd={addHolding} />
+        <AddHolding variant="inline" existingIds={[]} currency={cur} prices={prices} onAdd={addHolding} />
         <footer className="restore">
           {importControl("text-btn mono", "↑ Restore from a backup file")}
           {notice && <span role="status">{notice}</span>}
@@ -245,7 +260,7 @@ export default function App() {
 
   const valued = rows.filter((r) => r.value);
   const share = (r: Row) => Math.round((r.value! / total) * 100);
-  const allocLabel = valued.map((r) => `${r.symbol} ${share(r)}%`).join(", ");
+  const allocLabel = valued.map((r) => `${label(r)} ${share(r)}%`).join(", ");
   const [whole, cents] = formatMoneyParts(total, cur);
   const delta = total - previous;
 
@@ -305,7 +320,7 @@ export default function App() {
             <ul className="legend mono" aria-hidden>
               {valued.map((r) => (
                 <li key={r.id} style={{ "--coin": r.color } as CSSProperties}>
-                  {r.symbol} {share(r)}%
+                  {label(r)} {share(r)}%
                 </li>
               ))}
             </ul>
@@ -324,38 +339,24 @@ export default function App() {
         )}
       </section>
 
-      <section className="card holdings">
-        <h2 className="card-head label">
-          <span>Holdings</span>
-          <span>
-            {rows.length} coin{rows.length === 1 ? "" : "s"}
-          </span>
-        </h2>
-        <ul>
-          {rows.map((r) => (
-            <li key={r.id} className="row">
-              <Tile symbol={r.symbol} color={r.value ? r.color : undefined} />
-              <div className="coin">
-                <strong>{r.name}</strong>
-                <span className="mono">
-                  {formatAmount(r.amount)} {r.symbol}
-                </span>
-              </div>
-              <div className="value mono">
-                <strong>{r.value === null ? "No price yet" : formatMoney(r.value, cur)}</strong>
-                {r.price !== null && (
-                  <span>
-                    {formatMoney(r.price, cur)}
-                    {r.change !== null && !stale && (
-                      <em className={r.change >= 0 ? "up" : "down"}> {formatPercent(r.change)}</em>
-                    )}
-                  </span>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      </section>
+      {GROUPS.map(([kind, title]) => {
+        const group = rows.filter((r) => kindOf(r) === kind);
+        if (!group.length) return null;
+        const subtotal = group.reduce((sum, r) => sum + (r.value ?? 0), 0);
+        return (
+          <section key={kind} className="card holdings">
+            <h2 className="card-head label">
+              <span>{title}</span>
+              <span>{prices ? formatMoney(subtotal, cur) : "—"}</span>
+            </h2>
+            <ul>
+              {group.map((r) => (
+                <HoldingRow key={r.id} row={r} cur={cur} stale={stale} />
+              ))}
+            </ul>
+          </section>
+        );
+      })}
 
       <div className="bar">
         {stale && !online ? (
@@ -364,7 +365,7 @@ export default function App() {
           </button>
         ) : (
           <button type="button" className="btn primary wide" onClick={() => setAdding(true)}>
-            <span className="plus">+</span> Add coin
+            <span className="plus">+</span> Add
           </button>
         )}
         <button type="button" className="btn" onClick={() => setEditing(true)}>
@@ -377,7 +378,7 @@ export default function App() {
           variant="sheet"
           existingIds={state.holdings.map((h) => h.id)}
           currency={cur}
-          prices={prices?.data}
+          prices={prices}
           onAdd={addHolding}
           onCancel={() => setAdding(false)}
         />
@@ -396,6 +397,39 @@ function Brand() {
       </span>
       Folio
     </span>
+  );
+}
+
+function HoldingRow({ row: r, cur, stale }: { row: Row; cur: Currency; stale: boolean }) {
+  const fiat = kindOf(r) !== "crypto";
+  return (
+    <li className="row">
+      <Tile symbol={r.symbol} color={r.value ? r.color : undefined} />
+      <div className="coin">
+        <strong>{r.name}</strong>
+        <span className="mono">
+          {formatAmount(r.amount)} {r.symbol}
+        </span>
+      </div>
+      <div className="value mono">
+        <strong>{r.value === null ? (fiat ? "No rate yet" : "No price yet") : formatMoney(r.value, cur)}</strong>
+        {r.price !== null &&
+          (fiat ? (
+            r.fiat !== cur && (
+              <span>
+                1 {r.symbol} = {formatMoney(r.price, cur)}
+              </span>
+            )
+          ) : (
+            <span>
+              {formatMoney(r.price, cur)}
+              {r.change !== null && !stale && (
+                <em className={r.change >= 0 ? "up" : "down"}> {formatPercent(r.change)}</em>
+              )}
+            </span>
+          ))}
+      </div>
+    </li>
   );
 }
 

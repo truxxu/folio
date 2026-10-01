@@ -404,6 +404,7 @@ h1, h2, p { margin: 0; }
     0 0 0 calc(1px * var(--glow)) color-mix(in srgb, var(--accent) 50%, transparent),
     0 10px calc(32px * var(--glow)) color-mix(in srgb, var(--accent) calc(32% * var(--glow)), transparent);
 }
+.btn.primary:disabled { opacity: 0.4; box-shadow: none; }
 .btn.wide { flex: 1; }
 .btn.block { width: 100%; }
 .btn.tall { height: 54px; font-size: 1rem; }
@@ -516,7 +517,13 @@ h1, h2, p { margin: 0; }
 @media (prefers-color-scheme: light) {
   .chips button { background: var(--surface); color: var(--ink); }
 }
-.chips button:hover { border-color: var(--accent); }
+.chips button:hover:not(:disabled) { border-color: var(--accent); }
+.chips.pick { margin-top: 0; }
+.chips button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.chips button:disabled { cursor: default; opacity: 0.45; }
+
+.kind-toggle { align-self: flex-start; margin-bottom: 1.25rem; }
+.add-step > .label.gap { margin-top: 1.5rem; }
 
 .results {
   display: flex;
