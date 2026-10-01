@@ -1,0 +1,267 @@
+:root {
+  --bg: #eef1f5;
+  --surface: #ffffff;
+  --ink: #1c2533;
+  --muted: #5e6b80;
+  --line: #d9dee6;
+  --accent: #e8930c;
+  --up: #1f7a52;
+  --down: #b83c35;
+  --radius: 10px;
+
+  color-scheme: light dark;
+  font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 100%;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e2633;
+    --surface: #273143;
+    --ink: #e9edf3;
+    --muted: #9aa6b8;
+    --line: #36425a;
+    --up: #4cc38a;
+    --down: #f0857c;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.app {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: max(1.25rem, env(safe-area-inset-top)) 1.25rem max(2.5rem, env(safe-area-inset-bottom));
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.muted { color: var(--muted); font-weight: 400; }
+.up { color: var(--up); }
+.down { color: var(--down); }
+.error { color: var(--down); }
+
+/* Header */
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2.25rem;
+}
+.brand { font-weight: 600; font-size: 1.0625rem; letter-spacing: -0.01em; }
+
+.toggle {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+.toggle button {
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 0.25rem 0.75rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.toggle button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+
+/* Summary: the total and the allocation bar are the centrepiece */
+.total {
+  margin: 0;
+  font-size: clamp(2.5rem, 11vw, 3.75rem);
+  font-weight: 500;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  overflow-wrap: anywhere;
+}
+.change { margin: 0.5rem 0 0; font-weight: 500; }
+
+.alloc {
+  display: flex;
+  gap: 3px;
+  height: 14px;
+  margin: 1.75rem 0 0.875rem;
+}
+.alloc span {
+  min-width: 4px;
+  border-radius: 3px;
+  transition: flex-grow 0.5s ease;
+}
+.alloc span:first-child { border-top-left-radius: 7px; border-bottom-left-radius: 7px; }
+.alloc span:last-child { border-top-right-radius: 7px; border-bottom-right-radius: 7px; }
+
+.status {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+/* Holdings list */
+.holdings {
+  list-style: none;
+  margin: 2rem 0 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+.row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 0.875rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.dot { width: 10px; height: 10px; border-radius: 3px; }
+.coin, .value { min-width: 0; }
+.coin strong, .value strong { display: block; font-weight: 500; }
+.coin span, .value span { font-size: 0.875rem; color: var(--muted); }
+.value { text-align: right; }
+.value em { font-style: normal; }
+
+.edit { display: flex; align-items: center; gap: 0.75rem; }
+.edit .field { width: 8.5rem; text-align: right; padding: 0.4rem 0.6rem; }
+
+/* Controls */
+.actions { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.5rem; }
+
+.btn {
+  font: inherit;
+  font-weight: 500;
+  padding: 0.625rem 1.125rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #1c2533; }
+
+.link {
+  font: inherit;
+  padding: 0.25rem 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--line);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.link:hover { text-decoration-color: currentColor; }
+.link:disabled { color: var(--muted); cursor: default; }
+.link.danger { color: var(--down); }
+
+label:not(.link) {
+  display: block;
+  margin-bottom: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.field {
+  width: 100%;
+  font: inherit;
+  font-size: 1rem; /* 16px stops iOS zooming on focus */
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+}
+.field[aria-invalid="true"] { border-color: var(--down); }
+
+.hint { margin: 0.5rem 0 0; font-size: 0.875rem; color: var(--muted); }
+.hint.error { color: var(--down); }
+
+/* Add coin panel */
+.panel {
+  margin-top: 1.5rem;
+  padding: 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.panel .field { background: var(--bg); }
+.results { list-style: none; margin: 0.5rem -0.5rem 0; padding: 0; }
+.results button {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  padding: 0.625rem 0.5rem;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+.results button:hover:not(:disabled) { background: var(--bg); }
+.results button:disabled { cursor: default; opacity: 0.55; }
+.results strong { font-weight: 500; }
+.picked {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin: 0 0 1rem;
+}
+.picked strong { font-weight: 600; }
+
+/* First run */
+.welcome h1 {
+  margin: 0 0 0.75rem;
+  font-size: clamp(2rem, 8vw, 2.75rem);
+  font-weight: 500;
+  line-height: 1.1;
+  letter-spacing: -0.03em;
+}
+.welcome p { margin: 0; max-width: 30rem; color: var(--muted); }
+
+/* Footer */
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1.25rem;
+  margin-top: 3rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .alloc span { transition: none; }
+}
