@@ -17,13 +17,37 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export function fetchPrices(ids: string[], signal?: AbortSignal): Promise<PriceMap> {
+// CoinGecko doesn't support COP, so the USD→COP rate comes from yadio.io.
+async function fetchUsdCopRate(signal?: AbortSignal): Promise<number | null> {
+  try {
+    const res = await fetch("https://api.yadio.io/rate/COP/USD", { signal });
+    if (!res.ok) return null;
+    const { rate } = (await res.json()) as { rate?: unknown };
+    return typeof rate === "number" && Number.isFinite(rate) && rate > 0 ? rate : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchPrices(ids: string[], signal?: AbortSignal): Promise<PriceMap> {
   const params = new URLSearchParams({
     ids: ids.join(","),
-    vs_currencies: "usd,cop",
+    vs_currencies: "usd",
     include_24hr_change: "true",
   });
-  return get<PriceMap>(`/simple/price?${params}`, signal);
+  const [data, rate] = await Promise.all([
+    get<PriceMap>(`/simple/price?${params}`, signal),
+    fetchUsdCopRate(signal),
+  ]);
+  if (rate !== null) {
+    for (const p of Object.values(data)) {
+      if (p.usd === undefined) continue;
+      p.cop = p.usd * rate;
+      // Approximation: ignores how the USD/COP rate itself moved over the last 24h.
+      p.cop_24h_change = p.usd_24h_change;
+    }
+  }
+  return data;
 }
 
 export async function searchCoins(query: string, signal?: AbortSignal): Promise<CoinSearchResult[]> {
