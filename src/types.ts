@@ -4,10 +4,10 @@ export type Currency = "usd" | "cop";
 export type Fiat = "usd" | "eur" | "cop";
 export const FIATS: Fiat[] = ["usd", "eur", "cop"];
 
-export type HoldingKind = "crypto" | "cash" | "account";
+export type HoldingKind = "crypto" | "stock" | "cash" | "account";
 
 export interface Holding {
-  // crypto: CoinGecko id, e.g. "bitcoin"; cash: "cash:<fiat>"; account: "account:<uuid>"
+  // crypto: CoinGecko id, e.g. "bitcoin"; stock: CoinGecko id of a tokenized stock; cash: "cash:<fiat>"; account: "account:<uuid>"
   id: string;
   symbol: string; // e.g. "BTC", or the currency code for cash/accounts
   name: string; // e.g. "Bitcoin", "Euros", "Bancolombia savings"
@@ -17,6 +17,9 @@ export interface Holding {
 }
 
 export const kindOf = (h: Holding): HoldingKind => h.kind ?? "crypto";
+
+// Crypto and stocks are priced by CoinGecko; cash and accounts by the fiat rates.
+export const isMarket = (h: Holding): boolean => kindOf(h) === "crypto" || kindOf(h) === "stock";
 
 export interface AppState {
   version: 1;

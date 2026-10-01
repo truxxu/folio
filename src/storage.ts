@@ -62,7 +62,7 @@ function isHolding(h: unknown): h is Holding {
     Number.isFinite(o.amount) &&
     o.amount >= 0;
   if (!base) return false;
-  if (o.kind === undefined || o.kind === "crypto") return true;
+  if (o.kind === undefined || o.kind === "crypto" || o.kind === "stock") return true;
   return (o.kind === "cash" || o.kind === "account") && FIATS.includes(o.fiat as Fiat);
 }
 

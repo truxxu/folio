@@ -1,4 +1,4 @@
-import { kindOf, type Currency, type Fiat, type Holding, type PriceCache } from "./types";
+import { isMarket, type Currency, type Fiat, type Holding, type PriceCache } from "./types";
 
 export const FIAT_NAMES: Record<Fiat, string> = { usd: "US dollars", eur: "Euros", cop: "Colombian pesos" };
 
@@ -17,7 +17,7 @@ export function holdingPrice(
   prices: PriceCache | null | undefined,
   cur: Currency,
 ): { price: number | null; change: number | null } {
-  if (kindOf(h) !== "crypto") {
+  if (!isMarket(h)) {
     return { price: h.fiat ? fiatPrice(prices?.rates, h.fiat, cur) : null, change: null };
   }
   const p = prices?.data[h.id];

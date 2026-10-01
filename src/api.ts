@@ -67,3 +67,37 @@ export async function searchCoins(query: string, signal?: AbortSignal): Promise<
   );
   return data.coins.slice(0, 8);
 }
+
+// Stocks and ETFs come from tokenized versions on CoinGecko (Yahoo and friends can't be called from
+// the browser). Each family is matched by its CoinGecko id and adds a fixed affix to the ticker.
+const STOCK_FAMILIES: { match: RegExp; label: string; prefix?: string; suffix?: string }[] = [
+  { match: /-xstock$/, label: "xStock", suffix: "X" },
+  { match: /-ondo-tokenized/, label: "Ondo", suffix: "ON" },
+  { match: /-bstocks-tokenized/, label: "bStocks", suffix: "B" },
+  { match: /-coinbase-tokenized/, label: "Coinbase", suffix: "C" },
+  { match: /-rstock$/, label: "rStock", prefix: "R" },
+  { match: /-robinhood-tokenized/, label: "Robinhood" },
+  { match: /-dinari-tokenized/, label: "Dinari" },
+];
+
+const stockFamily = (id: string) => STOCK_FAMILIES.find((f) => f.match.test(id));
+
+// The issuer of a tokenized stock, e.g. "Robinhood", to tell apart tokens of the same stock.
+export const stockFamilyLabel = (id: string) => stockFamily(id)?.label ?? "";
+
+// The real ticker behind a token symbol, e.g. SPYX → SPY.
+export function stockTicker(c: CoinSearchResult): string {
+  let s = c.symbol.toUpperCase();
+  const f = stockFamily(c.id);
+  if (f?.suffix && s.length > f.suffix.length && s.endsWith(f.suffix)) s = s.slice(0, -f.suffix.length);
+  if (f?.prefix && s.length > f.prefix.length && s.startsWith(f.prefix)) s = s.slice(f.prefix.length);
+  return s;
+}
+
+export async function searchStocks(query: string, signal?: AbortSignal): Promise<CoinSearchResult[]> {
+  const data = await get<{ coins: CoinSearchResult[] }>(
+    `/search?query=${encodeURIComponent(query)}`,
+    signal,
+  );
+  return data.coins.filter((c) => stockFamily(c.id)).slice(0, 8);
+}

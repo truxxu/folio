@@ -29,7 +29,7 @@ import {
   savePrices,
   saveState,
 } from "./storage";
-import { kindOf, type AppState, type Currency, type Holding, type HoldingKind, type PriceCache } from "./types";
+import { isMarket, kindOf, type AppState, type Currency, type Holding, type HoldingKind, type PriceCache } from "./types";
 import { holdingPrice } from "./value";
 
 const REFRESH_MS = 5 * 60_000;
@@ -38,6 +38,7 @@ type Row = Holding & { price: number | null; change: number | null; value: numbe
 
 const GROUPS: [HoldingKind, string][] = [
   ["crypto", "Crypto"],
+  ["stock", "Stocks & ETFs"],
   ["cash", "Cash"],
   ["account", "Accounts"],
 ];
@@ -69,11 +70,11 @@ export default function App() {
     };
   }, []);
 
-  // CoinGecko ids only; cash and accounts are valued from the fiat rates fetched alongside.
+  // CoinGecko ids (crypto and tokenized stocks); cash and accounts are valued from the fiat rates fetched alongside.
   const ids = useMemo(
     () =>
       state.holdings
-        .filter((h) => kindOf(h) === "crypto")
+        .filter(isMarket)
         .map((h) => h.id)
         .sort()
         .join(","),
@@ -401,7 +402,7 @@ function Brand() {
 }
 
 function HoldingRow({ row: r, cur, stale }: { row: Row; cur: Currency; stale: boolean }) {
-  const fiat = kindOf(r) !== "crypto";
+  const fiat = !isMarket(r);
   return (
     <li className="row">
       <Tile symbol={r.symbol} color={r.value ? r.color : undefined} />
