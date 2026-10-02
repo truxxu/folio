@@ -29,11 +29,13 @@ import {
   exportBackup,
   loadPrices,
   loadState,
+  onSavedChange,
   persist,
+  readSaved,
   requestPersistence,
   type Vault,
 } from "./storage";
-import { isMarket, kindOf, type AppState, type Currency, type Holding, type HoldingKind, type PriceCache } from "./types";
+import { FIATS, isMarket, kindOf, type AppState, type Currency, type Holding, type HoldingKind, type PriceCache } from "./types";
 import { holdingPrice } from "./value";
 
 const REFRESH_MS = 5 * 60_000;
@@ -95,7 +97,35 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
   const [online, setOnline] = useState(navigator.onLine);
   const [, setTick] = useState(0);
 
-  useEffect(() => persist(vault, state, prices), [vault, state, prices]);
+  // Set when adopting data another tab saved, so it isn't written straight back (which, re-encrypted
+  // with a new IV, would wake that tab and loop).
+  const skipPersist = useRef(false);
+  useEffect(() => {
+    if (skipPersist.current) {
+      skipPersist.current = false;
+      return;
+    }
+    persist(vault, state, prices);
+  }, [vault, state, prices]);
+
+  // Another tab saved: follow it, or lock if it now uses a passcode this tab doesn't hold, so this
+  // tab never writes plaintext or the old key over it.
+  const vaultRef = useRef(vault);
+  vaultRef.current = vault;
+  const onLockRef = useRef(onLock);
+  onLockRef.current = onLock;
+  useEffect(
+    () =>
+      onSavedChange(async () => {
+        const saved = await readSaved(vaultRef.current);
+        if (!saved) return onLockRef.current();
+        skipPersist.current = true;
+        setState(saved.state);
+        setPrices(saved.prices);
+        setVault(saved.vault);
+      }),
+    [],
+  );
   useEffect(() => {
     const on = () => setOnline(true);
     const off = () => setOnline(false);
@@ -119,6 +149,8 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
   );
   const hasHoldings = state.holdings.length > 0;
 
+  const pricesRef = useRef(prices);
+  pricesRef.current = prices;
   const inFlight = useRef(false);
   const refresh = useCallback(async () => {
     if (!hasHoldings || inFlight.current) return;
@@ -126,7 +158,7 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
     setLoading(true);
     setError(null);
     try {
-      const cache = { ...(await fetchPrices(ids ? ids.split(",") : [])), fetchedAt: Date.now() };
+      const cache = { ...(await fetchPrices(ids ? ids.split(",") : [], pricesRef.current?.rates)), fetchedAt: Date.now() };
       setPrices(cache);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't update prices.");
@@ -137,12 +169,10 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
   }, [ids, hasHoldings]);
 
   // Fetch when the app opens or the set of coins changes, unless the cache is fresh and complete.
-  const pricesRef = useRef(prices);
-  pricesRef.current = prices;
   useEffect(() => {
     const cache = pricesRef.current;
     const fresh = cache && Date.now() - cache.fetchedAt < 60_000;
-    const complete = cache?.rates && ids.split(",").every((id) => !id || cache.data[id]);
+    const complete = cache && FIATS.every((f) => cache.rates?.[f]) && ids.split(",").every((id) => !id || cache.data[id]);
     if (!(fresh && complete)) refresh();
   }, [ids, refresh]);
 
@@ -463,7 +493,7 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
           <>
             <div className="alloc" role="img" aria-label={`Allocation: ${allocLabel}`}>
               {valued.map((r) => (
-                <span key={r.id} style={{ flexGrow: r.value!, "--coin": r.color } as CSSProperties} />
+                <span key={r.id} style={{ flexGrow: masked ? 1 : r.value!, "--coin": r.color } as CSSProperties} />
               ))}
             </div>
             <ul className="legend mono" aria-hidden>
@@ -606,7 +636,7 @@ function EditRow({ row, onSave, onRemove }: { row: Row; onSave: (n: number) => v
           {invalid ? "Must be above 0" : row.symbol}
         </span>
       </div>
-      <AmountInput holding={row} onSave={onSave} onInvalid={setInvalid} />
+      <AmountInput key={row.amount} holding={row} onSave={onSave} onInvalid={setInvalid} />
       <button type="button" className="remove" aria-label={`Remove ${row.name}`} onClick={onRemove}>
         ×
       </button>

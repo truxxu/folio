@@ -40,11 +40,16 @@ export function formatPercent(n: number): string {
   return `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(2)}%`;
 }
 
-// Accepts "0.5", "0,5", "1,234.5". Returns null when it isn't a number.
+// Accepts "0.5", "0,5", "1,234.5", "1.234,5" (es-CO). With both separators, the last one is the
+// decimal. Returns null when it isn't a number.
 export function parseAmount(input: string): number | null {
   let s = input.trim().replace(/\s/g, "");
   if (!s) return null;
-  s = s.includes(",") && s.includes(".") ? s.replace(/,/g, "") : s.replace(",", ".");
+  if (s.includes(",") && s.includes(".")) {
+    const decimal = s.lastIndexOf(",") > s.lastIndexOf(".") ? "," : ".";
+    s = s.replaceAll(decimal === "," ? "." : ",", "");
+  }
+  s = s.replace(",", ".");
   if (!/^(\d+\.?\d*|\.\d+)$/.test(s)) return null;
   const n = Number(s);
   return Number.isFinite(n) ? n : null;

@@ -18,9 +18,9 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
 }
 
 // CoinGecko doesn't support COP, and cash can be held in EUR, so fiat rates come from yadio.io.
-// A rate that can't be fetched is left out; USD always works.
+// Only the rates actually fetched are returned; `fetchPrices` fills the gaps from the last good ones.
 async function fetchUsdRates(signal?: AbortSignal): Promise<Rates> {
-  const rates: Rates = { usd: 1 };
+  const rates: Rates = {};
   try {
     const res = await fetch("https://api.yadio.io/exrates/USD", { signal });
     if (!res.ok) return rates;
@@ -30,7 +30,7 @@ async function fetchUsdRates(signal?: AbortSignal): Promise<Rates> {
       if (typeof rate === "number" && Number.isFinite(rate) && rate > 0) rates[f] = rate;
     }
   } catch {
-    // keep just USD
+    // none fetched
   }
   return rates;
 }
@@ -50,8 +50,10 @@ const DECOY_IDS = [
   "binancecoin",
 ];
 
+// `fallback` is the last good set of rates, kept for any rate yadio doesn't return this time.
 export async function fetchPrices(
   ids: string[],
+  fallback?: Rates,
   signal?: AbortSignal,
 ): Promise<{ data: PriceMap; rates: Rates }> {
   const params = new URLSearchParams({
@@ -60,10 +62,11 @@ export async function fetchPrices(
     include_24hr_change: "true",
   });
   // A portfolio with only cash and accounts doesn't need CoinGecko (and its rate limit) at all.
-  const [data, rates] = await Promise.all([
+  const [data, fetched] = await Promise.all([
     ids.length ? get<PriceMap>(`/simple/price?${params}`, signal) : Promise.resolve({} as PriceMap),
     fetchUsdRates(signal),
   ]);
+  const rates: Rates = { ...fallback, ...fetched, usd: 1 };
   if (rates.cop !== undefined) {
     for (const p of Object.values(data)) {
       if (p.usd === undefined) continue;

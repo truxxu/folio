@@ -142,7 +142,7 @@ function MarketForm({
     setQuote(known ?? null);
     if (!picked || known) return;
     const ctrl = new AbortController();
-    fetchPrices([picked.id], ctrl.signal)
+    fetchPrices([picked.id], pricesRef.current?.rates, ctrl.signal)
       .then(({ data }) => setQuote(data[picked.id] ?? null))
       .catch(() => {});
     return () => ctrl.abort();

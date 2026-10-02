@@ -70,6 +70,39 @@ export function persist(vault: Vault | null, state: AppState, prices: PriceCache
     .catch(() => {});
 }
 
+// What another tab last saved, as this tab would load it. Null when it's sealed with a key this tab
+// doesn't hold (a passcode set or changed elsewhere), so the caller locks.
+export async function readSaved(
+  vault: Vault | null,
+): Promise<{ vault: Vault | null; state: AppState; prices: PriceCache | null } | null> {
+  const state = loadState();
+  if (state) return { vault: null, state, prices: loadPrices() };
+  const sealed = read<unknown>(STATE_KEY);
+  if (!vault || !isSealed(sealed) || sealed.salt !== vault.salt) return null;
+  try {
+    const opened = toState((await openWith(vault.key, sealed)) as AppState);
+    const savedPrices = read<unknown>(PRICE_KEY);
+    let prices: PriceCache | null = null;
+    try {
+      if (isSealed(savedPrices)) prices = (await openWith(vault.key, savedPrices)) as PriceCache;
+    } catch {
+      // An unreadable price cache just means fetching again.
+    }
+    return { vault, state: opened, prices };
+  } catch {
+    return null;
+  }
+}
+
+// Calls `cb` when another tab saves the state (the `storage` event never fires in the tab that wrote).
+export function onSavedChange(cb: () => void): () => void {
+  const listener = (e: StorageEvent) => {
+    if (e.key === STATE_KEY || e.key === null) cb();
+  };
+  window.addEventListener("storage", listener);
+  return () => window.removeEventListener("storage", listener);
+}
+
 export async function createVault(passcode: string): Promise<Vault> {
   const salt = newSalt();
   return { key: await deriveKey(passcode, salt), salt, iterations: ITERATIONS };
