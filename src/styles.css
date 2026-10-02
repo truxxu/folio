@@ -153,6 +153,21 @@ h1, h2, p { margin: 0; }
   .logo { background: #0e1512; border-color: #0e1512; }
 }
 
+.top-actions { display: flex; align-items: center; gap: 0.5rem; }
+.eye-btn {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+.eye-btn:hover { color: var(--ink); }
+
 .toggle {
   display: inline-flex;
   padding: 3px;
@@ -367,6 +382,48 @@ h1, h2, p { margin: 0; }
 }
 .card-row + .card-row { border-top: 1px solid var(--line-soft); }
 .card-row:hover { background: var(--raised); }
+/* On/off switch inside a card row */
+.switch {
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--line);
+  transition: background 0.15s;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--ink);
+  transition: transform 0.15s;
+}
+[aria-checked="true"] > .switch { background: var(--accent); }
+[aria-checked="true"] > .switch::after { transform: translateX(16px); background: var(--on-accent); }
+
+/* Password and passcode forms */
+.secret-form { display: flex; flex-direction: column; gap: 0.5rem; padding: 1rem; }
+.card-row + .secret-form,
+.secret-form + .card-row { border-top: 1px solid var(--line-soft); }
+.secret-form .hint { margin-top: 0; }
+.field.secret {
+  height: 46px;
+  padding: 0 0.875rem;
+  border-radius: 12px;
+  background: var(--bg);
+}
+.secret-actions { display: flex; justify-content: flex-end; align-items: center; gap: 1rem; margin-top: 0.25rem; }
+.secret-actions .pill-btn:disabled { opacity: 0.4; box-shadow: none; cursor: default; }
+.lock-form { padding: 0; }
+.lock-form .btn { margin-top: 0.5rem; }
+.restore > span:first-child { max-width: 22rem; text-align: center; }
+.text-btn.danger { color: var(--down); }
+
 .note {
   margin: 0.75rem 0.25rem 0;
   font-size: 0.71875rem;
@@ -691,6 +748,10 @@ h1, h2, p { margin: 0; }
 }
 .restore .text-btn { font-size: 0.78125rem; }
 
+/* Blurred while the app is in the background, for the app-switcher snapshot. */
+html.shielded #root,
+html.shielded .sheet { filter: blur(16px); }
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -711,4 +772,5 @@ h1, h2, p { margin: 0; }
   .alloc span { transition: none; }
   .sheet { animation: none; }
   .status .busy .dot { animation: none; }
+  .switch, .switch::after { transition: none; }
 }

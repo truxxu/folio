@@ -11,6 +11,9 @@ function moneyFormat(value: number, currency: Currency): Intl.NumberFormat {
   });
 }
 
+// Stands in for money values and amounts while balances are hidden.
+export const MASK = "••••";
+
 export function formatMoney(value: number, currency: Currency): string {
   return moneyFormat(value, currency).format(value);
 }

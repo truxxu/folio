@@ -35,12 +35,27 @@ async function fetchUsdRates(signal?: AbortSignal): Promise<Rates> {
   return rates;
 }
 
+// Always asked for alongside the user's own ids, so the request doesn't list exactly what they hold.
+// This only blurs common holdings: a rare coin still stands out, and searches still reveal what was typed.
+const DECOY_IDS = [
+  "bitcoin",
+  "ethereum",
+  "tether",
+  "solana",
+  "ripple",
+  "usd-coin",
+  "dogecoin",
+  "cardano",
+  "tron",
+  "binancecoin",
+];
+
 export async function fetchPrices(
   ids: string[],
   signal?: AbortSignal,
 ): Promise<{ data: PriceMap; rates: Rates }> {
   const params = new URLSearchParams({
-    ids: ids.join(","),
+    ids: [...new Set([...ids, ...DECOY_IDS])].sort().join(","),
     vs_currencies: "usd",
     include_24hr_change: "true",
   });

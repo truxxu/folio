@@ -25,6 +25,7 @@ export interface AppState {
   version: 1;
   holdings: Holding[];
   currency: Currency;
+  hideBalances?: boolean; // mask money values when the app opens; missing in data saved before it existed
 }
 
 // { bitcoin: { usd: 64000, usd_24h_change: 1.2, cop: ..., cop_24h_change: ... } }

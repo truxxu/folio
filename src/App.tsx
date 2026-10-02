@@ -4,11 +4,12 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
   type CSSProperties,
   type ReactNode,
 } from "react";
 import { AddHolding } from "./AddHolding";
+import { ImportBackup, NewSecretForm } from "./Backup";
+import { Lock } from "./Lock";
 import { coinColor, Tile } from "./Tile";
 import { fetchPrices } from "./api";
 import {
@@ -17,22 +18,27 @@ import {
   formatMoney,
   formatMoneyParts,
   formatPercent,
+  MASK,
   parseAmount,
   timeAgo,
 } from "./format";
 import {
+  createVault,
+  EMPTY,
+  eraseAll,
   exportBackup,
   loadPrices,
   loadState,
-  parseBackup,
+  persist,
   requestPersistence,
-  savePrices,
-  saveState,
+  type Vault,
 } from "./storage";
 import { isMarket, kindOf, type AppState, type Currency, type Holding, type HoldingKind, type PriceCache } from "./types";
 import { holdingPrice } from "./value";
 
 const REFRESH_MS = 5 * 60_000;
+// With a passcode set, coming back after this long in the background asks for it again.
+const LOCK_AFTER_MS = 60_000;
 
 type Row = Holding & { price: number | null; change: number | null; value: number | null; color: string };
 
@@ -46,20 +52,51 @@ const GROUPS: [HoldingKind, string][] = [
 // Short name for the allocation legend: the ticker or currency, or the account's own name.
 const label = (r: Row) => (kindOf(r) === "account" ? (r.name.length > 12 ? `${r.name.slice(0, 11)}…` : r.name) : r.symbol);
 
+type Session = { state: AppState; prices: PriceCache | null; vault: Vault | null };
+
 export default function App() {
-  const [state, setState] = useState<AppState>(loadState);
-  const [prices, setPrices] = useState<PriceCache | null>(loadPrices);
+  // Null while locked: the data is encrypted and the key is only kept in memory after unlocking.
+  const [session, setSession] = useState<Session | null>(() => {
+    const state = loadState();
+    return state && { state, prices: loadPrices(), vault: null };
+  });
+
+  useEffect(() => {
+    requestPersistence();
+  }, []);
+
+  if (!session) {
+    return (
+      <Lock
+        brand={<Brand />}
+        onUnlock={setSession}
+        onReplace={(state) => {
+          eraseAll();
+          setSession({ state: state ?? EMPTY, prices: null, vault: null });
+        }}
+      />
+    );
+  }
+  return <Portfolio initial={session} onLock={() => setSession(null)} />;
+}
+
+function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }) {
+  const [state, setState] = useState(initial.state);
+  const [prices, setPrices] = useState(initial.prices);
+  const [vault, setVault] = useState(initial.vault);
+  const [revealed, setRevealed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [settingPasscode, setSettingPasscode] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
   const [, setTick] = useState(0);
 
-  useEffect(() => saveState(state), [state]);
+  useEffect(() => persist(vault, state, prices), [vault, state, prices]);
   useEffect(() => {
-    requestPersistence();
     const on = () => setOnline(true);
     const off = () => setOnline(false);
     window.addEventListener("online", on);
@@ -91,7 +128,6 @@ export default function App() {
     try {
       const cache = { ...(await fetchPrices(ids ? ids.split(",") : [])), fetchedAt: Date.now() };
       setPrices(cache);
-      savePrices(cache);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't update prices.");
     } finally {
@@ -131,7 +167,46 @@ export default function App() {
     };
   }, []);
 
+  // Leaving the app re-hides balances and blurs the screen, so the app switcher and anyone watching
+  // when it's reopened don't see them. Best-effort: iOS may take its snapshot before the blur paints,
+  // and a web app can't block screenshots.
+  const lockRef = useRef(() => {});
+  lockRef.current = () => vault && onLock();
+  useEffect(() => {
+    const root = document.documentElement;
+    let hiddenAt = 0;
+    const shield = () => root.classList.add("shielded");
+    const unshield = () => root.classList.remove("shielded");
+    const hide = () => {
+      hiddenAt ||= Date.now();
+      setRevealed(false);
+      shield();
+    };
+    const show = () => {
+      unshield();
+      if (hiddenAt && Date.now() - hiddenAt > LOCK_AFTER_MS) lockRef.current();
+      hiddenAt = 0;
+    };
+    const visibility = () => (document.visibilityState === "hidden" ? hide() : show());
+    // Android Chrome fires blur before the app-switcher snapshot.
+    window.addEventListener("blur", shield);
+    window.addEventListener("focus", unshield);
+    window.addEventListener("pagehide", hide);
+    window.addEventListener("pageshow", show);
+    document.addEventListener("visibilitychange", visibility);
+    return () => {
+      unshield();
+      window.removeEventListener("blur", shield);
+      window.removeEventListener("focus", unshield);
+      window.removeEventListener("pagehide", hide);
+      window.removeEventListener("pageshow", show);
+      document.removeEventListener("visibilitychange", visibility);
+    };
+  }, []);
+
   const cur = state.currency;
+  const masked = !!state.hideBalances && !revealed;
+  const money = (n: number) => (masked ? MASK : formatMoney(n, cur));
   const rows: Row[] = useMemo(() => {
     const list = state.holdings.map((h) => {
       const { price, change } = holdingPrice(h, prices, cur);
@@ -163,27 +238,33 @@ export default function App() {
     if (state.holdings.length === 1) setEditing(false);
   };
   const setCurrency = (currency: Currency) => setState((s) => ({ ...s, currency }));
+  const setHideBalances = (hideBalances: boolean) => setState((s) => ({ ...s, hideBalances }));
 
-  async function importFile(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    try {
-      const restored = parseBackup(await file.text());
-      if (state.holdings.length && !confirm("Replace your current holdings with this backup?")) return;
-      setState(restored);
-      setNotice(`Restored ${restored.holdings.length} holding${restored.holdings.length === 1 ? "" : "s"}.`);
-    } catch (err) {
-      setNotice(err instanceof Error ? err.message : "Couldn't read that file.");
-    }
-  }
+  // Tapping the eye turns hiding on for good; after that it only reveals until the app is left.
+  const toggleMask = () => {
+    if (!state.hideBalances) {
+      setHideBalances(true);
+      setRevealed(false);
+    } else setRevealed((r) => !r);
+  };
+
+  const restore = (restored: AppState) => {
+    if (state.holdings.length && !confirm("Replace your current holdings with this backup?")) return;
+    setState({ ...restored, hideBalances: state.hideBalances });
+    setNotice(`Restored ${restored.holdings.length} holding${restored.holdings.length === 1 ? "" : "s"}.`);
+  };
 
   const importControl = (className: string, children: ReactNode) => (
-    <label className={className}>
+    <ImportBackup className={className} onRestore={restore} onError={setNotice}>
       {children}
-      <input type="file" accept="application/json,.json" className="visually-hidden" onChange={importFile} />
-    </label>
+    </ImportBackup>
   );
+
+  const turnOffPasscode = () => {
+    if (!confirm("Turn off the passcode? Your holdings will be stored unencrypted on this device.")) return;
+    setVault(null);
+    setNotice("Passcode turned off.");
+  };
 
   if (state.holdings.length === 0) {
     return (
@@ -223,12 +304,68 @@ export default function App() {
           ))}
         </ul>
 
+        <h2 className="label section">Privacy</h2>
+        <div className="card">
+          <button
+            type="button"
+            className="card-row"
+            role="switch"
+            aria-checked={!!state.hideBalances}
+            onClick={() => setHideBalances(!state.hideBalances)}
+          >
+            <span>Hide balances when opening</span>
+            <span className="switch" aria-hidden />
+          </button>
+          {settingPasscode ? (
+            <NewSecretForm
+              label={vault ? "New passcode" : "Passcode"}
+              minLength={6}
+              hint="Longer is stronger. If you forget it, the only way back in is a backup, so export one first."
+              submitLabel={() => (vault ? "Change passcode" : "Set passcode")}
+              onSubmit={async (passcode) => {
+                setVault(await createVault(passcode));
+                setSettingPasscode(false);
+                setNotice("Passcode set. Folio locks after a minute in the background.");
+              }}
+              onCancel={() => setSettingPasscode(false)}
+            />
+          ) : (
+            <button type="button" className="card-row" onClick={() => setSettingPasscode(true)}>
+              <span>{vault ? "Change passcode" : "Set passcode"}</span>
+              <span className="mono muted">{vault ? "On" : "Off"}</span>
+            </button>
+          )}
+          {vault && !settingPasscode && (
+            <button type="button" className="card-row" onClick={turnOffPasscode}>
+              <span>Turn off passcode</span>
+            </button>
+          )}
+        </div>
+        <p className="note mono">
+          A passcode encrypts your holdings on this device and is asked for when Folio opens.
+        </p>
+
         <h2 className="label section">Backup</h2>
         <div className="card">
-          <button type="button" className="card-row" onClick={() => exportBackup(state)}>
-            <span>Export backup</span>
-            <span className="mono muted">↓ .json</span>
-          </button>
+          {exporting ? (
+            <NewSecretForm
+              label="Password (optional)"
+              minLength={8}
+              optional
+              hint="Without a password, anyone who gets the file can read it."
+              submitLabel={(password) => (password ? "Export encrypted" : "Export")}
+              onSubmit={async (password) => {
+                await exportBackup(state, password || undefined);
+                setExporting(false);
+              }}
+              onCancel={() => setExporting(false)}
+            />
+          ) : (
+            <button type="button" className="card-row" onClick={() => setExporting(true)}>
+              <span>Export backup</span>
+              <span className="mono muted">↓ .json</span>
+            </button>
+          )}
           {importControl(
             "card-row",
             <>
@@ -260,21 +397,32 @@ export default function App() {
   const stale = !loading && (!online || !!error);
 
   const valued = rows.filter((r) => r.value);
-  const share = (r: Row) => Math.round((r.value! / total) * 100);
-  const allocLabel = valued.map((r) => `${label(r)} ${share(r)}%`).join(", ");
-  const [whole, cents] = formatMoneyParts(total, cur);
+  // Shares are hidden too: next to a coin's price they give away the amount held.
+  const share = (r: Row) => (masked ? "" : ` ${Math.round((r.value! / total) * 100)}%`);
+  const allocLabel = valued.map((r) => `${label(r)}${share(r)}`).join(", ");
+  const [whole, cents] = masked ? [MASK, ""] : formatMoneyParts(total, cur);
   const delta = total - previous;
 
   return (
     <main className={`app with-bar${stale ? " stale" : ""}`}>
       <header className="top">
         <Brand />
-        <div className="toggle mono" role="group" aria-label="Currency">
-          {(["usd", "cop"] as const).map((c) => (
-            <button key={c} type="button" aria-pressed={cur === c} onClick={() => setCurrency(c)}>
-              {c.toUpperCase()}
-            </button>
-          ))}
+        <div className="top-actions">
+          <button
+            type="button"
+            className="eye-btn"
+            aria-label={masked ? "Show balances" : "Hide balances"}
+            onClick={toggleMask}
+          >
+            <EyeIcon closed={masked} />
+          </button>
+          <div className="toggle mono" role="group" aria-label="Currency">
+            {(["usd", "cop"] as const).map((c) => (
+              <button key={c} type="button" aria-pressed={cur === c} onClick={() => setCurrency(c)}>
+                {c.toUpperCase()}
+              </button>
+            ))}
+          </div>
         </div>
       </header>
 
@@ -306,8 +454,8 @@ export default function App() {
                 {totalChange >= 0 ? "▲" : "▼"} {formatPercent(totalChange)}
               </span>
               <span>
-                {delta >= 0 ? "+" : "−"}
-                {formatMoney(Math.abs(delta), cur)} in 24 h
+                {!masked && (delta >= 0 ? "+" : "−")}
+                {money(Math.abs(delta))} in 24 h
               </span>
             </p>
           ))}
@@ -321,7 +469,8 @@ export default function App() {
             <ul className="legend mono" aria-hidden>
               {valued.map((r) => (
                 <li key={r.id} style={{ "--coin": r.color } as CSSProperties}>
-                  {label(r)} {share(r)}%
+                  {label(r)}
+                  {share(r)}
                 </li>
               ))}
             </ul>
@@ -348,11 +497,11 @@ export default function App() {
           <section key={kind} className="card holdings">
             <h2 className="card-head label">
               <span>{title}</span>
-              <span>{prices ? formatMoney(subtotal, cur) : "—"}</span>
+              <span>{prices ? money(subtotal) : "—"}</span>
             </h2>
             <ul>
               {group.map((r) => (
-                <HoldingRow key={r.id} row={r} cur={cur} stale={stale} />
+                <HoldingRow key={r.id} row={r} cur={cur} stale={stale} masked={masked} />
               ))}
             </ul>
           </section>
@@ -401,7 +550,17 @@ function Brand() {
   );
 }
 
-function HoldingRow({ row: r, cur, stale }: { row: Row; cur: Currency; stale: boolean }) {
+function EyeIcon({ closed }: { closed: boolean }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden>
+      <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" />
+      <circle cx="12" cy="12" r="3" />
+      {closed && <path d="M4 4l16 16" />}
+    </svg>
+  );
+}
+
+function HoldingRow({ row: r, cur, stale, masked }: { row: Row; cur: Currency; stale: boolean; masked: boolean }) {
   const fiat = !isMarket(r);
   return (
     <li className="row">
@@ -409,11 +568,13 @@ function HoldingRow({ row: r, cur, stale }: { row: Row; cur: Currency; stale: bo
       <div className="coin">
         <strong>{r.name}</strong>
         <span className="mono">
-          {formatAmount(r.amount)} {r.symbol}
+          {masked ? MASK : formatAmount(r.amount)} {r.symbol}
         </span>
       </div>
       <div className="value mono">
-        <strong>{r.value === null ? (fiat ? "No rate yet" : "No price yet") : formatMoney(r.value, cur)}</strong>
+        <strong>
+          {r.value === null ? (fiat ? "No rate yet" : "No price yet") : masked ? MASK : formatMoney(r.value, cur)}
+        </strong>
         {r.price !== null &&
           (fiat ? (
             r.fiat !== cur && (
