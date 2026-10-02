@@ -78,12 +78,16 @@ export async function fetchPrices(
   return { data, rates };
 }
 
-export async function searchCoins(query: string, signal?: AbortSignal): Promise<CoinSearchResult[]> {
+async function search(query: string, signal?: AbortSignal): Promise<CoinSearchResult[]> {
   const data = await get<{ coins: CoinSearchResult[] }>(
     `/search?query=${encodeURIComponent(query)}`,
     signal,
   );
-  return data.coins.slice(0, 8);
+  return data.coins;
+}
+
+export async function searchCoins(query: string, signal?: AbortSignal): Promise<CoinSearchResult[]> {
+  return (await search(query, signal)).slice(0, 8);
 }
 
 // Stocks and ETFs come from tokenized versions on CoinGecko (Yahoo and friends can't be called from
@@ -113,9 +117,5 @@ export function stockTicker(c: CoinSearchResult): string {
 }
 
 export async function searchStocks(query: string, signal?: AbortSignal): Promise<CoinSearchResult[]> {
-  const data = await get<{ coins: CoinSearchResult[] }>(
-    `/search?query=${encodeURIComponent(query)}`,
-    signal,
-  );
-  return data.coins.filter((c) => stockFamily(c.id)).slice(0, 8);
+  return (await search(query, signal)).filter((c) => stockFamily(c.id)).slice(0, 8);
 }

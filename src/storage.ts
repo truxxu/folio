@@ -80,18 +80,23 @@ export async function readSaved(
   const sealed = read<unknown>(STATE_KEY);
   if (!vault || !isSealed(sealed) || sealed.salt !== vault.salt) return null;
   try {
-    const opened = toState((await openWith(vault.key, sealed)) as AppState);
-    const savedPrices = read<unknown>(PRICE_KEY);
-    let prices: PriceCache | null = null;
-    try {
-      if (isSealed(savedPrices)) prices = (await openWith(vault.key, savedPrices)) as PriceCache;
-    } catch {
-      // An unreadable price cache just means fetching again.
-    }
-    return { vault, state: opened, prices };
+    return await openSession(vault, sealed);
   } catch {
     return null;
   }
+}
+
+// Opens the sealed state with `vault` (throws when the key is wrong) and the price cache if it can.
+async function openSession(vault: Vault, sealed: Sealed) {
+  const state = toState((await openWith(vault.key, sealed)) as AppState);
+  const savedPrices = read<unknown>(PRICE_KEY);
+  let prices: PriceCache | null = null;
+  try {
+    if (isSealed(savedPrices)) prices = (await openWith(vault.key, savedPrices)) as PriceCache;
+  } catch {
+    // An unreadable price cache just means fetching again.
+  }
+  return { vault, state, prices };
 }
 
 // Calls `cb` when another tab saves the state (the `storage` event never fires in the tab that wrote).
@@ -114,16 +119,7 @@ export async function unlock(passcode: string): Promise<{ vault: Vault; state: A
   const sealed = read<unknown>(STATE_KEY);
   if (!isSealed(sealed)) throw new Error("Nothing to unlock.");
   const { salt, iterations } = sealed;
-  const vault = { key: await deriveKey(passcode, salt, iterations), salt, iterations };
-  const state = toState((await openWith(vault.key, sealed)) as AppState);
-  const savedPrices = read<unknown>(PRICE_KEY);
-  let prices: PriceCache | null = null;
-  try {
-    if (isSealed(savedPrices)) prices = (await openWith(vault.key, savedPrices)) as PriceCache;
-  } catch {
-    // An unreadable price cache just means fetching again.
-  }
-  return { vault, state, prices };
+  return openSession({ key: await deriveKey(passcode, salt, iterations), salt, iterations }, sealed);
 }
 
 export function eraseAll() {

@@ -1,14 +1,23 @@
 import type { Currency } from "./types";
 
+// Formatters are costly to build and there are only a few combinations, so they're reused.
+const moneyFormats = new Map<string, Intl.NumberFormat>();
+
 function moneyFormat(value: number, currency: Currency): Intl.NumberFormat {
   const isCop = currency === "cop";
   const small = value !== 0 && Math.abs(value) < 1;
-  return new Intl.NumberFormat(isCop ? "es-CO" : "en-US", {
-    style: "currency",
-    currency: currency.toUpperCase(),
-    minimumFractionDigits: isCop ? 0 : 2,
-    maximumFractionDigits: isCop ? (small ? 2 : 0) : small ? 6 : 2,
-  });
+  const key = `${currency}:${small}`;
+  let f = moneyFormats.get(key);
+  if (!f) {
+    f = new Intl.NumberFormat(isCop ? "es-CO" : "en-US", {
+      style: "currency",
+      currency: currency.toUpperCase(),
+      minimumFractionDigits: isCop ? 0 : 2,
+      maximumFractionDigits: isCop ? (small ? 2 : 0) : small ? 6 : 2,
+    });
+    moneyFormats.set(key, f);
+  }
+  return f;
 }
 
 // Stands in for money values and amounts while balances are hidden.
@@ -21,14 +30,16 @@ export function formatMoney(value: number, currency: Currency): string {
 // Splits "$44,405.91" into ["$44,405", ".91"] so the cents can be styled separately.
 export function formatMoneyParts(value: number, currency: Currency): [string, string] {
   const parts = moneyFormat(value, currency).formatToParts(value);
-  const at = parts.findIndex((p) => p.type === "decimal");
-  if (at === -1) return [parts.map((p) => p.value).join(""), ""];
   const join = (ps: Intl.NumberFormatPart[]) => ps.map((p) => p.value).join("");
+  const at = parts.findIndex((p) => p.type === "decimal");
+  if (at === -1) return [join(parts), ""];
   return [join(parts.slice(0, at)), join(parts.slice(at))];
 }
 
+const amountFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 8 });
+
 export function formatAmount(amount: number): string {
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 8 }).format(amount);
+  return amountFormat.format(amount);
 }
 
 // Plain string for editing, never in exponent notation.

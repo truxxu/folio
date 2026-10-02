@@ -31,7 +31,7 @@ export function Lock({
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    if (!passcode || busy || wait > 0) return;
+    if (!passcode || busy || waiting) return;
     setBusy(true);
     try {
       const session = await unlock(passcode);
@@ -72,10 +72,10 @@ export function Lock({
             setWrong(false);
           }}
         />
-        <p id="passcode-hint" className={`hint mono${wrong || wait > 0 ? " error" : ""}`} role="status">
-          {wait > 0 ? `Too many tries. Wait ${wait} s.` : wrong ? "Wrong passcode." : " "}
+        <p id="passcode-hint" className={`hint mono${wrong || waiting ? " error" : ""}`} role="status">
+          {waiting ? `Too many tries. Wait ${wait} s.` : wrong ? "Wrong passcode." : " "}
         </p>
-        <button type="submit" className="btn primary block tall" disabled={!passcode || busy || wait > 0}>
+        <button type="submit" className="btn primary block tall" disabled={!passcode || busy || waiting}>
           {busy ? "Unlocking…" : "Unlock"}
         </button>
       </form>

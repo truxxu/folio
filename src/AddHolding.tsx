@@ -198,12 +198,13 @@ function MarketForm({
           <ul className="results">
             {results.map((c) => {
               const added = existingIds.includes(c.id);
+              const ticker = tickerOf(kind, c);
               return (
                 <li key={c.id}>
                   <button type="button" disabled={added} onClick={() => setPicked(c)}>
-                    <Tile symbol={tickerOf(kind, c)} />
+                    <Tile symbol={ticker} />
                     <span className="result-name">
-                      <strong>{c.name}</strong> <span className="mono muted">{tickerOf(kind, c)}</span>
+                      <strong>{c.name}</strong> <span className="mono muted">{ticker}</span>
                     </span>
                     <span className="mono muted">
                       {added
@@ -289,9 +290,10 @@ function FiatForm({
     if (!fiat) return;
     const label = name.trim();
     const n = parseAmount(amount);
-    if (kind === "account" && !label) setNameError("Give the account a name, like Savings");
+    const noName = kind === "account" && !label;
+    if (noName) setNameError("Give the account a name, like Savings");
     if (n === null || n <= 0) setAmountError("Enter an amount greater than zero, like 1500");
-    if ((kind === "account" && !label) || n === null || n <= 0) return;
+    if (noName || n === null || n <= 0) return;
     onAdd({
       kind,
       id: kind === "cash" ? `cash:${fiat}` : `account:${crypto.randomUUID()}`,

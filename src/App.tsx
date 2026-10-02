@@ -147,6 +147,7 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
         .join(","),
     [state.holdings],
   );
+  const idList = useMemo(() => (ids ? ids.split(",") : []), [ids]);
   const hasHoldings = state.holdings.length > 0;
 
   const pricesRef = useRef(prices);
@@ -158,7 +159,7 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
     setLoading(true);
     setError(null);
     try {
-      const cache = { ...(await fetchPrices(ids ? ids.split(",") : [], pricesRef.current?.rates)), fetchedAt: Date.now() };
+      const cache = { ...(await fetchPrices(idList, pricesRef.current?.rates)), fetchedAt: Date.now() };
       setPrices(cache);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't update prices.");
@@ -166,15 +167,15 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
       inFlight.current = false;
       setLoading(false);
     }
-  }, [ids, hasHoldings]);
+  }, [idList, hasHoldings]);
 
   // Fetch when the app opens or the set of coins changes, unless the cache is fresh and complete.
   useEffect(() => {
     const cache = pricesRef.current;
     const fresh = cache && Date.now() - cache.fetchedAt < 60_000;
-    const complete = cache && FIATS.every((f) => cache.rates?.[f]) && ids.split(",").every((id) => !id || cache.data[id]);
+    const complete = cache && FIATS.every((f) => cache.rates?.[f]) && idList.every((id) => cache.data[id]);
     if (!(fresh && complete)) refresh();
-  }, [ids, refresh]);
+  }, [idList, refresh]);
 
   // Periodic refresh while the app is visible; also re-render the "updated x ago" text.
   const refreshRef = useRef(refresh);
@@ -200,8 +201,6 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
   // Leaving the app re-hides balances and blurs the screen, so the app switcher and anyone watching
   // when it's reopened don't see them. Best-effort: iOS may take its snapshot before the blur paints,
   // and a web app can't block screenshots.
-  const lockRef = useRef(() => {});
-  lockRef.current = () => vault && onLock();
   useEffect(() => {
     const root = document.documentElement;
     let hiddenAt = 0;
@@ -214,7 +213,7 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
     };
     const show = () => {
       unshield();
-      if (hiddenAt && Date.now() - hiddenAt > LOCK_AFTER_MS) lockRef.current();
+      if (hiddenAt && Date.now() - hiddenAt > LOCK_AFTER_MS && vaultRef.current) onLockRef.current();
       hiddenAt = 0;
     };
     const visibility = () => (document.visibilityState === "hidden" ? hide() : show());
