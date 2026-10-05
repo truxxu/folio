@@ -1,5 +1,5 @@
 import { deriveKey, isSealed, ITERATIONS, newSalt, open, openWith, seal, sealWith, type Sealed } from "./crypto";
-import { FIATS, type AppState, type Fiat, type Holding, type PriceCache } from "./types";
+import { FIATS, STOCK_PREFIX, type AppState, type Fiat, type Holding, type PriceCache } from "./types";
 
 const STATE_KEY = "folio:state:v1";
 const PRICE_KEY = "folio:prices:v1";
@@ -32,7 +32,12 @@ function write(key: string, value: unknown) {
   }
 }
 
-const toState = (saved: AppState): AppState => ({ ...EMPTY, ...saved });
+// Stocks used to be tokenized stocks priced by CoinGecko, with the CoinGecko id as their id. Those are
+// dropped: stocks are now "stock:<TICKER>" and priced by Finnhub.
+const dropLegacyStocks = (holdings: Holding[]) =>
+  holdings.filter((h) => h.kind !== "stock" || h.id.startsWith(STOCK_PREFIX));
+
+const toState = (saved: AppState): AppState => ({ ...EMPTY, ...saved, holdings: dropLegacyStocks(saved.holdings) });
 
 // Null when the data is locked behind a passcode (see `unlock`).
 export function loadState(): AppState | null {
@@ -154,7 +159,8 @@ export async function requestPersistence() {
 
 // With a password the file holds a `Sealed` copy of the state instead of plain JSON.
 export async function exportBackup(state: AppState, password?: string) {
-  const { hideBalances: _, ...data } = state;
+  // The API key stays on this device: a backup without a password would hand it to anyone with the file.
+  const { hideBalances: _, finnhubKey: __, ...data } = state;
   const content = password ? { folio: "backup", ...(await seal(password, data)) } : data;
   const blob = new Blob([JSON.stringify(content, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -188,7 +194,7 @@ function toBackupState(data: unknown): AppState {
   }
   return {
     version: 1,
-    holdings: o.holdings,
+    holdings: dropLegacyStocks(o.holdings),
     currency: o.currency === "cop" ? "cop" : "usd",
   };
 }

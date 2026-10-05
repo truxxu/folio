@@ -6,13 +6,13 @@ import { VitePWA } from "vite-plugin-pwa";
 // The deploy workflow sets BASE_PATH automatically; locally it's "/".
 const base = process.env.BASE_PATH ?? "/";
 
-// Only the app's own files may run, and data may only be sent to the price APIs.
+// Only the app's own files may run, and data may only be sent to the price APIs (CoinGecko, yadio, Finnhub).
 // Adding another API host means adding it to connect-src. Build-only: the dev server injects inline scripts.
 const CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'", // React style={{ "--coin": … }} attributes
-  "connect-src 'self' https://api.coingecko.com https://api.yadio.io",
+  "connect-src 'self' https://api.coingecko.com https://api.yadio.io https://finnhub.io",
   "img-src 'self' data:",
   "font-src 'self'",
   "worker-src 'self'",

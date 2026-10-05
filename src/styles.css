@@ -423,6 +423,8 @@ h1, h2, p { margin: 0; }
 .lock-form .btn { margin-top: 0.5rem; }
 .restore > span:first-child { max-width: 22rem; text-align: center; }
 .text-btn.danger { color: var(--down); }
+.key-intro { margin: 0 0 1rem; line-height: 1.5; }
+.hint a, .note a { color: var(--accent); }
 
 .note {
   margin: 0.75rem 0.25rem 0;
