@@ -10,6 +10,7 @@ import {
 import { AddHolding } from "./AddHolding";
 import { ImportBackup, NewSecretForm } from "./Backup";
 import { Lock } from "./Lock";
+import { FINNHUB_SIGNUP, StockKeyForm } from "./StockKey";
 import { coinColor, Tile } from "./Tile";
 import { fetchPrices } from "./api";
 import {
@@ -35,7 +36,7 @@ import {
   requestPersistence,
   type Vault,
 } from "./storage";
-import { FIATS, isMarket, kindOf, type AppState, type Currency, type Holding, type HoldingKind, type PriceCache } from "./types";
+import { FIATS, isFiat, isMarket, isStock, kindOf, stockId, type AppState, type Currency, type Holding, type HoldingKind, type PriceCache } from "./types";
 import { holdingPrice } from "./value";
 
 const REFRESH_MS = 5 * 60_000;
@@ -53,6 +54,9 @@ const GROUPS: [HoldingKind, string][] = [
 
 // Short name for the allocation legend: the ticker or currency, or the account's own name.
 const label = (r: Row) => (kindOf(r) === "account" ? (r.name.length > 12 ? `${r.name.slice(0, 11)}…` : r.name) : r.symbol);
+
+// A stable string for a set of ids, so effects only re-run when the set itself changes.
+const joinSorted = (list: string[]) => [...list].sort().join(",");
 
 type Session = { state: AppState; prices: PriceCache | null; vault: Vault | null };
 
@@ -93,6 +97,7 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState(false);
   const [settingPasscode, setSettingPasscode] = useState(false);
+  const [settingKey, setSettingKey] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
   const [, setTick] = useState(0);
@@ -137,17 +142,16 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
     };
   }, []);
 
-  // CoinGecko ids (crypto and tokenized stocks); cash and accounts are valued from the fiat rates fetched alongside.
-  const ids = useMemo(
-    () =>
-      state.holdings
-        .filter(isMarket)
-        .map((h) => h.id)
-        .sort()
-        .join(","),
-    [state.holdings],
+  // CoinGecko ids for crypto and tickers for stocks (Finnhub, only with a key); cash and accounts are
+  // valued from the fiat rates fetched alongside.
+  const key = state.finnhubKey;
+  const ids = useMemo(() => joinSorted(state.holdings.filter(isMarket).map((h) => h.id)), [state.holdings]);
+  const tickers = useMemo(
+    () => (key ? joinSorted(state.holdings.filter(isStock).map((h) => h.symbol)) : ""),
+    [state.holdings, key],
   );
   const idList = useMemo(() => (ids ? ids.split(",") : []), [ids]);
+  const tickerList = useMemo(() => (tickers ? tickers.split(",") : []), [tickers]);
   const hasHoldings = state.holdings.length > 0;
 
   const pricesRef = useRef(prices);
@@ -159,23 +163,36 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
     setLoading(true);
     setError(null);
     try {
-      const cache = { ...(await fetchPrices(idList, pricesRef.current?.rates)), fetchedAt: Date.now() };
-      setPrices(cache);
+      const last = pricesRef.current;
+      const stocks = key && tickerList.length ? { tickers: tickerList, key } : null;
+      const { data, rates, stockError } = await fetchPrices(idList, stocks, last?.rates);
+      // Keep the last price of any stock Finnhub didn't return this time (failed, or an unknown ticker).
+      for (const t of tickerList) {
+        const id = stockId(t);
+        if (!data[id] && last?.data[id]) data[id] = last.data[id];
+      }
+      setPrices({ data, rates, fetchedAt: Date.now() });
+      if (stockError) setError(stockError);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't update prices.");
     } finally {
       inFlight.current = false;
       setLoading(false);
     }
-  }, [idList, hasHoldings]);
+  }, [idList, tickerList, key, hasHoldings]);
 
-  // Fetch when the app opens or the set of coins changes, unless the cache is fresh and complete.
+  // Fetch when the app opens or the set of coins, stocks or the key changes, unless the cache is fresh
+  // and complete. Without a key `tickerList` is empty, so stocks never count as missing.
   useEffect(() => {
     const cache = pricesRef.current;
     const fresh = cache && Date.now() - cache.fetchedAt < 60_000;
-    const complete = cache && FIATS.every((f) => cache.rates?.[f]) && idList.every((id) => cache.data[id]);
+    const complete =
+      cache &&
+      FIATS.every((f) => cache.rates?.[f]) &&
+      idList.every((id) => cache.data[id]) &&
+      tickerList.every((t) => cache.data[stockId(t)]);
     if (!(fresh && complete)) refresh();
-  }, [idList, refresh]);
+  }, [idList, tickerList, refresh]);
 
   // Periodic refresh while the app is visible; also re-render the "updated x ago" text.
   const refreshRef = useRef(refresh);
@@ -268,6 +285,7 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
   };
   const setCurrency = (currency: Currency) => setState((s) => ({ ...s, currency }));
   const setHideBalances = (hideBalances: boolean) => setState((s) => ({ ...s, hideBalances }));
+  const setFinnhubKey = (finnhubKey: string | undefined) => setState((s) => ({ ...s, finnhubKey }));
 
   // Tapping the eye turns hiding on for good; after that it only reveals until the app is left.
   const toggleMask = () => {
@@ -279,7 +297,8 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
 
   const restore = (restored: AppState) => {
     if (state.holdings.length && !confirm("Replace your current holdings with this backup?")) return;
-    setState({ ...restored, hideBalances: state.hideBalances });
+    // Backups never carry the API key, so the one on this device stays.
+    setState({ ...restored, hideBalances: state.hideBalances, finnhubKey: state.finnhubKey });
     setNotice(`Restored ${restored.holdings.length} holding${restored.holdings.length === 1 ? "" : "s"}.`);
   };
 
@@ -305,11 +324,19 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
         <section className="welcome">
           <h1>What do you hold?</h1>
           <p>
-            Add your coins, cash and accounts with the amount you hold. Amounts stay on this device. Only coin
-            names are sent out, to look up prices.
+            Add your coins, stocks, cash and accounts with the amount you hold. Amounts stay on this device.
+            Only coin names and stock tickers are sent out, to look up prices.
           </p>
         </section>
-        <AddHolding variant="inline" existingIds={[]} currency={cur} prices={prices} onAdd={addHolding} />
+        <AddHolding
+          variant="inline"
+          existingIds={[]}
+          currency={cur}
+          prices={prices}
+          finnhubKey={key}
+          onSetKey={setFinnhubKey}
+          onAdd={addHolding}
+        />
         <footer className="restore">
           {importControl("text-btn mono", "↑ Restore from a backup file")}
           {notice && <span role="status">{notice}</span>}
@@ -372,6 +399,38 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
         </div>
         <p className="note mono">
           A passcode encrypts your holdings on this device and is asked for when Folio opens.
+        </p>
+
+        <h2 className="label section">Stock prices</h2>
+        <div className="card">
+          {settingKey ? (
+            <StockKeyForm
+              variant="card"
+              onSave={(k) => {
+                setFinnhubKey(k);
+                setSettingKey(false);
+                setNotice("Finnhub API key saved.");
+              }}
+              onCancel={() => setSettingKey(false)}
+            />
+          ) : (
+            <button type="button" className="card-row" onClick={() => setSettingKey(true)}>
+              <span>{key ? "Change Finnhub API key" : "Set Finnhub API key"}</span>
+              <span className="mono muted">{key ? "On" : "Off"}</span>
+            </button>
+          )}
+          {key && !settingKey && (
+            <button type="button" className="card-row" onClick={() => setFinnhubKey(undefined)}>
+              <span>Remove key</span>
+            </button>
+          )}
+        </div>
+        <p className="note mono">
+          Stocks are priced by Finnhub with your own free key from{" "}
+          <a href={FINNHUB_SIGNUP} target="_blank" rel="noopener noreferrer">
+            finnhub.io
+          </a>
+          . It stays on this device and isn't included in backups.
         </p>
 
         <h2 className="label section">Backup</h2>
@@ -530,7 +589,7 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
             </h2>
             <ul>
               {group.map((r) => (
-                <HoldingRow key={r.id} row={r} cur={cur} stale={stale} masked={masked} />
+                <HoldingRow key={r.id} row={r} cur={cur} stale={stale} masked={masked} hasKey={!!key} />
               ))}
             </ul>
           </section>
@@ -558,6 +617,8 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
           existingIds={state.holdings.map((h) => h.id)}
           currency={cur}
           prices={prices}
+          finnhubKey={key}
+          onSetKey={setFinnhubKey}
           onAdd={addHolding}
           onCancel={() => setAdding(false)}
         />
@@ -589,8 +650,21 @@ function EyeIcon({ closed }: { closed: boolean }) {
   );
 }
 
-function HoldingRow({ row: r, cur, stale, masked }: { row: Row; cur: Currency; stale: boolean; masked: boolean }) {
-  const fiat = !isMarket(r);
+function HoldingRow({
+  row: r,
+  cur,
+  stale,
+  masked,
+  hasKey,
+}: {
+  row: Row;
+  cur: Currency;
+  stale: boolean;
+  masked: boolean;
+  hasKey: boolean;
+}) {
+  const fiat = isFiat(r);
+  const missing = fiat ? "No rate yet" : isStock(r) && !hasKey ? "Needs API key" : "No price yet";
   return (
     <li className="row">
       <Tile symbol={r.symbol} color={r.value ? r.color : undefined} />
@@ -602,7 +676,7 @@ function HoldingRow({ row: r, cur, stale, masked }: { row: Row; cur: Currency; s
       </div>
       <div className="value mono">
         <strong>
-          {r.value === null ? (fiat ? "No rate yet" : "No price yet") : masked ? MASK : formatMoney(r.value, cur)}
+          {r.value === null ? missing : masked ? MASK : formatMoney(r.value, cur)}
         </strong>
         {r.price !== null &&
           (fiat ? (

@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { fetchPrices, searchCoins, searchStocks, stockFamilyLabel, stockTicker } from "./api";
+import { fetchPrices, fetchStockQuotes, searchCoins, searchStocks, withCop } from "./api";
 import { formatMoney, parseAmount } from "./format";
+import { StockKeyForm } from "./StockKey";
 import { coinColor, Tile } from "./Tile";
 import {
   FIATS,
-  type CoinSearchResult,
+  stockId,
   type Currency,
   type Fiat,
   type Holding,
   type HoldingKind,
   type PriceCache,
   type PriceMap,
+  type Rates,
 } from "./types";
 import { FIAT_NAMES, fiatPrice } from "./value";
 
@@ -19,11 +21,13 @@ interface Props {
   existingIds: string[];
   currency: Currency;
   prices?: PriceCache | null;
+  finnhubKey?: string;
+  onSetKey: (key: string) => void;
   onAdd: (holding: Holding) => void;
   onCancel?: () => void;
 }
 
-type FormProps = Omit<Props, "onCancel">;
+type FormProps = Omit<Props, "onCancel" | "onSetKey">;
 
 const KINDS: [HoldingKind, string][] = [
   ["crypto", "Crypto"],
@@ -32,40 +36,72 @@ const KINDS: [HoldingKind, string][] = [
   ["account", "Account"],
 ];
 
-// What differs between the crypto and stock forms. Both are CoinGecko coins underneath.
-const MARKETS = {
+// A search result of either market, as the form shows it. `id` is the holding id.
+interface Pick {
+  id: string;
+  symbol: string;
+  name: string;
+  detail: string; // shown on the right of a result, e.g. "#1" or "ETP"
+}
+
+type Market = {
+  search: (query: string, key: string, signal: AbortSignal) => Promise<Pick[]>;
+  // USD (and COP when the rate is known) price of one pick, for the "≈ value" estimate.
+  quote: (p: Pick, key: string, rates: Rates | undefined, signal: AbortSignal) => Promise<PriceMap[string] | undefined>;
+  label: string;
+  placeholder: string;
+  noun: string;
+  change: string;
+  // Shortcuts on the first-run screen; they skip the search request.
+  quick: Pick[];
+};
+
+// What differs between the crypto (CoinGecko) and stock (Finnhub) forms.
+const MARKETS: Record<"crypto" | "stock", Market> = {
   crypto: {
-    search: searchCoins,
+    search: async (q, _key, signal) =>
+      (await searchCoins(q, signal)).map((c) => ({
+        id: c.id,
+        symbol: c.symbol.toUpperCase(),
+        name: c.name,
+        detail: c.market_cap_rank ? `#${c.market_cap_rank}` : "",
+      })),
+    quote: async (p, _key, rates, signal) => (await fetchPrices([p.id], null, rates, signal)).data[p.id],
     label: "Coin",
     placeholder: "Search by name or ticker",
     noun: "coins",
     change: "Change coin",
-    // Shortcuts on the first-run screen; they skip the search request.
     quick: [
-      { id: "bitcoin", symbol: "BTC", name: "Bitcoin", market_cap_rank: null },
-      { id: "ethereum", symbol: "ETH", name: "Ethereum", market_cap_rank: null },
-      { id: "solana", symbol: "SOL", name: "Solana", market_cap_rank: null },
-    ] as CoinSearchResult[],
+      { id: "bitcoin", symbol: "BTC", name: "Bitcoin", detail: "" },
+      { id: "ethereum", symbol: "ETH", name: "Ethereum", detail: "" },
+      { id: "solana", symbol: "SOL", name: "Solana", detail: "" },
+    ],
   },
   stock: {
-    search: searchStocks,
+    search: async (q, key, signal) =>
+      (await searchStocks(q, key, signal)).map((r) => ({
+        id: stockId(r.symbol),
+        symbol: r.symbol,
+        name: r.description,
+        detail: r.type === "Common Stock" ? "Stock" : r.type,
+      })),
+    quote: async (p, key, rates, signal) => {
+      const data = await fetchStockQuotes([p.symbol], key, signal);
+      return (rates?.cop ? withCop(data, rates.cop) : data)[p.id];
+    },
     label: "Stock or ETF",
-    placeholder: "Search by ticker, e.g. SPY",
-    noun: "tokenized stocks",
+    placeholder: "Search by ticker or name, e.g. SPY",
+    noun: "US stocks or ETFs",
     change: "Change stock",
     quick: [
-      { id: "sp500-xstock", symbol: "SPYX", name: "SP500 xStock", market_cap_rank: null },
-      { id: "nasdaq-xstock", symbol: "QQQX", name: "Nasdaq xStock", market_cap_rank: null },
-      { id: "vanguard-s-p-500-etf-rstock", symbol: "RVOO", name: "Vanguard S&P 500 ETF rStock", market_cap_rank: null },
-    ] as CoinSearchResult[],
+      { id: stockId("SPY"), symbol: "SPY", name: "SPDR S&P 500 ETF Trust", detail: "" },
+      { id: stockId("QQQ"), symbol: "QQQ", name: "Invesco QQQ Trust", detail: "" },
+      { id: stockId("VOO"), symbol: "VOO", name: "Vanguard S&P 500 ETF", detail: "" },
+    ],
   },
 };
 
-// Symbol shown for a search result: the real ticker for tokenized stocks (SPYX → SPY).
-const tickerOf = (kind: "crypto" | "stock", c: CoinSearchResult) =>
-  kind === "stock" ? stockTicker(c) : c.symbol.toUpperCase();
-
-export function AddHolding({ onCancel, ...props }: Props) {
+export function AddHolding({ onCancel, onSetKey, ...props }: Props) {
   const [kind, setKind] = useState<HoldingKind>("crypto");
 
   const body = (
@@ -77,7 +113,9 @@ export function AddHolding({ onCancel, ...props }: Props) {
           </button>
         ))}
       </div>
-      {kind === "crypto" || kind === "stock" ? (
+      {kind === "stock" && !props.finnhubKey ? (
+        <StockKeyForm variant="sheet" onSave={onSetKey} />
+      ) : kind === "crypto" || kind === "stock" ? (
         <MarketForm key={kind} kind={kind} {...props} />
       ) : (
         <FiatForm key={kind} kind={kind} {...props} />
@@ -89,21 +127,22 @@ export function AddHolding({ onCancel, ...props }: Props) {
   return <Sheet onClose={onCancel}>{body}</Sheet>;
 }
 
-// Crypto and tokenized stocks: search CoinGecko, pick one, enter an amount.
+// Crypto (CoinGecko) and stocks (Finnhub): search, pick one, enter an amount.
 function MarketForm({
   kind,
   variant,
   existingIds,
   currency,
   prices,
+  finnhubKey = "",
   onAdd,
 }: FormProps & { kind: "crypto" | "stock" }) {
   const m = MARKETS[kind];
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<CoinSearchResult[]>([]);
+  const [results, setResults] = useState<Pick[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
-  const [picked, setPicked] = useState<CoinSearchResult | null>(null);
+  const [picked, setPicked] = useState<Pick | null>(null);
   const [quote, setQuote] = useState<PriceMap[string] | null>(null);
   const [amount, setAmount] = useState("");
   const [amountError, setAmountError] = useState<string | null>(null);
@@ -120,7 +159,7 @@ function MarketForm({
     const timer = setTimeout(async () => {
       setSearchError(null);
       try {
-        setResults(await m.search(q, ctrl.signal));
+        setResults(await m.search(q, finnhubKey, ctrl.signal));
       } catch (e) {
         if (!ctrl.signal.aborted) setSearchError(e instanceof Error ? e.message : "Search failed.");
       } finally {
@@ -131,10 +170,10 @@ function MarketForm({
       clearTimeout(timer);
       ctrl.abort();
     };
-  }, [query, picked, m]);
+  }, [query, picked, m, finnhubKey]);
 
-  // Price of the picked coin, for the "≈ value" estimate. Uses cached prices when we have them,
-  // otherwise one request for just this coin. Without a price the estimate is simply hidden.
+  // Price of the pick, for the "≈ value" estimate. Uses cached prices when we have them,
+  // otherwise one request for just this one. Without a price the estimate is simply hidden.
   const pricesRef = useRef(prices);
   pricesRef.current = prices;
   useEffect(() => {
@@ -142,11 +181,11 @@ function MarketForm({
     setQuote(known ?? null);
     if (!picked || known) return;
     const ctrl = new AbortController();
-    fetchPrices([picked.id], pricesRef.current?.rates, ctrl.signal)
-      .then(({ data }) => setQuote(data[picked.id] ?? null))
+    m.quote(picked, finnhubKey, pricesRef.current?.rates, ctrl.signal)
+      .then((q) => setQuote(q ?? null))
       .catch(() => {});
     return () => ctrl.abort();
-  }, [picked]);
+  }, [picked, m, finnhubKey]);
 
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -156,12 +195,12 @@ function MarketForm({
       setAmountError("Enter an amount greater than zero, like 0.25");
       return;
     }
-    onAdd({ kind, id: picked.id, symbol: tickerOf(kind, picked), name: picked.name, amount: n });
+    onAdd({ kind, id: picked.id, symbol: picked.symbol, name: picked.name, amount: n });
   }
 
   const showEmpty = query.trim().length >= 2 && !searching && !searchError && results.length === 0;
   const price = quote?.[currency] ?? null;
-  const symbol = picked ? tickerOf(kind, picked) : "";
+  const symbol = picked?.symbol ?? "";
 
   if (!picked) {
     return (
@@ -183,13 +222,13 @@ function MarketForm({
           <div className="chips mono">
             {m.quick.map((c) => (
               <button key={c.id} type="button" disabled={existingIds.includes(c.id)} onClick={() => setPicked(c)}>
-                + {tickerOf(kind, c)}
+                + {c.symbol}
               </button>
             ))}
           </div>
         )}
         {kind === "stock" && !query.trim() && (
-          <p className="hint">Prices come from tokenized versions of the stock and may differ slightly from the exchange.</p>
+          <p className="hint">Prices from Finnhub, for US-listed stocks and ETFs.</p>
         )}
         {searching && <p className="hint">Searching…</p>}
         {searchError && <p className="hint error">{searchError}</p>}
@@ -198,23 +237,14 @@ function MarketForm({
           <ul className="results">
             {results.map((c) => {
               const added = existingIds.includes(c.id);
-              const ticker = tickerOf(kind, c);
               return (
                 <li key={c.id}>
                   <button type="button" disabled={added} onClick={() => setPicked(c)}>
-                    <Tile symbol={ticker} />
+                    <Tile symbol={c.symbol} />
                     <span className="result-name">
-                      <strong>{c.name}</strong> <span className="mono muted">{ticker}</span>
+                      <strong>{c.name}</strong> <span className="mono muted">{c.symbol}</span>
                     </span>
-                    <span className="mono muted">
-                      {added
-                        ? "Already added"
-                        : kind === "stock"
-                          ? stockFamilyLabel(c.id)
-                          : c.market_cap_rank
-                            ? `#${c.market_cap_rank}`
-                            : ""}
-                    </span>
+                    <span className="mono muted">{added ? "Already added" : c.detail}</span>
                   </button>
                 </li>
               );
