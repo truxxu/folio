@@ -57,7 +57,7 @@ export interface StockRequest {
 
 // `fallback` is the last good set of rates, kept for any rate yadio doesn't return this time.
 // A Finnhub failure doesn't fail the whole fetch: crypto prices still come back, with `stockError` set
-// and no stock entries, so the caller can keep the last stock prices it had.
+// and no entries for the stocks that failed, so the caller can keep the last prices it had for them.
 export async function fetchPrices(
   ids: string[],
   stocks: StockRequest | null,
@@ -74,11 +74,17 @@ export async function fetchPrices(
   const [coins, stockData, fetched] = await Promise.all([
     ids.length ? get<PriceMap>(`/simple/price?${params}`, signal) : Promise.resolve({} as PriceMap),
     stocks?.tickers.length
-      ? fetchStockQuotes(stocks.tickers, stocks.key, signal).catch((e: unknown) => {
-          if (signal?.aborted) throw e;
-          stockError = e instanceof Error ? e.message : "Couldn't update stock prices.";
-          return {} as PriceMap;
-        })
+      ? fetchStockQuotes(stocks.tickers, stocks.key, signal).then(
+          (r) => {
+            stockError = r.error;
+            return r.data;
+          },
+          (e: unknown) => {
+            if (signal?.aborted) throw e;
+            stockError = e instanceof Error ? e.message : "Couldn't update stock prices.";
+            return {} as PriceMap;
+          },
+        )
       : Promise.resolve({} as PriceMap),
     fetchUsdRates(signal),
   ]);
@@ -122,9 +128,11 @@ async function finnhubGet<T>(path: string, key: string, signal?: AbortSignal): P
     if (signal?.aborted) throw e;
     throw new Error("Can't reach the stock price service. Check your connection.");
   }
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
     throw new Error("Your Finnhub API key was rejected. Check it in Edit → Stock prices.");
   }
+  // A valid key gets 403 for data its plan doesn't cover (e.g. a symbol outside the free tier).
+  if (res.status === 403) throw new Error("Your Finnhub plan doesn't cover this data.");
   if (res.status === 429) {
     throw new Error("The stock price service is rate-limiting requests. Try again in a minute.");
   }
@@ -132,16 +140,17 @@ async function finnhubGet<T>(path: string, key: string, signal?: AbortSignal): P
   return res.json() as Promise<T>;
 }
 
-// The free tier only quotes US listings; other exchanges have a suffix like "SAP.DE".
+// The free tier only quotes US listings, so the search is limited to US exchanges. Not filtered on a
+// "." in the symbol: US class shares have one too ("BRK.B").
 const STOCK_TYPES = new Set(["Common Stock", "ETP", "ADR", "REIT"]);
 
 export async function searchStocks(query: string, key: string, signal?: AbortSignal): Promise<StockSearchResult[]> {
   const data = await finnhubGet<{ result?: StockSearchResult[] }>(
-    `/search?q=${encodeURIComponent(query)}`,
+    `/search?q=${encodeURIComponent(query)}&exchange=US`,
     key,
     signal,
   );
-  return (data.result ?? []).filter((r) => !r.symbol.includes(".") && STOCK_TYPES.has(r.type)).slice(0, 8);
+  return (data.result ?? []).filter((r) => STOCK_TYPES.has(r.type)).slice(0, 8);
 }
 
 // c: current price, dp: % change from the previous close. An unknown symbol comes back as all zeros.
@@ -150,17 +159,39 @@ interface Quote {
   dp?: number | null;
 }
 
+// Requests in flight at once: well under Finnhub's 30 calls/second burst limit.
+const QUOTE_CONCURRENCY = 5;
+
 // USD quotes keyed by holding id, one request per ticker (the free tier allows 60 a minute).
-export async function fetchStockQuotes(tickers: string[], key: string, signal?: AbortSignal): Promise<PriceMap> {
-  const quotes = await Promise.all(
-    tickers.map((t) => finnhubGet<Quote>(`/quote?symbol=${encodeURIComponent(t)}`, key, signal)),
-  );
+// Each ticker succeeds or fails on its own; this only throws when none of them could be fetched.
+export async function fetchStockQuotes(
+  tickers: string[],
+  key: string,
+  signal?: AbortSignal,
+): Promise<{ data: PriceMap; error?: string }> {
   const data: PriceMap = {};
-  quotes.forEach((q, i) => {
-    if (!q.c) return;
-    data[stockId(tickers[i])] = { usd: q.c, usd_24h_change: q.dp ?? undefined };
-  });
-  return data;
+  const failed: string[] = [];
+  let firstError: unknown;
+  let next = 0;
+  const worker = async () => {
+    while (next < tickers.length) {
+      const t = tickers[next++];
+      try {
+        const q = await finnhubGet<Quote>(`/quote?symbol=${encodeURIComponent(t)}`, key, signal);
+        if (q.c) data[stockId(t)] = { usd: q.c, usd_24h_change: q.dp ?? undefined };
+      } catch (e) {
+        if (signal?.aborted) throw e;
+        failed.push(t);
+        firstError ??= e;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(QUOTE_CONCURRENCY, tickers.length) }, worker));
+  if (failed.length === tickers.length) throw firstError;
+  const error = failed.length
+    ? `Couldn't update ${failed.sort().join(", ")}: ${firstError instanceof Error ? firstError.message : "unknown error."}`
+    : undefined;
+  return { data, error };
 }
 
 // Throws the "rejected" error when Finnhub doesn't accept the key.

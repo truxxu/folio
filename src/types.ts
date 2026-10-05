@@ -43,6 +43,9 @@ export interface PriceCache {
   data: PriceMap;
   rates?: Rates; // absent in caches saved before cash/accounts existed
   fetchedAt: number;
+  // Stock prices carried over from an earlier fetch because Finnhub failed, keyed by holding id, with
+  // when each was really fetched. They don't count as fresh, so they're retried.
+  stale?: Record<string, number>;
 }
 
 export interface CoinSearchResult {

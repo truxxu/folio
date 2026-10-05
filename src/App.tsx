@@ -40,6 +40,7 @@ import { FIATS, isFiat, isMarket, isStock, kindOf, stockId, type AppState, type 
 import { holdingPrice } from "./value";
 
 const REFRESH_MS = 5 * 60_000;
+const RETRY_MS = 60_000;
 // With a passcode set, coming back after this long in the background asks for it again.
 const LOCK_AFTER_MS = 60_000;
 
@@ -166,12 +167,17 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
       const last = pricesRef.current;
       const stocks = key && tickerList.length ? { tickers: tickerList, key } : null;
       const { data, rates, stockError } = await fetchPrices(idList, stocks, last?.rates);
-      // Keep the last price of any stock Finnhub didn't return this time (failed, or an unknown ticker).
+      // Keep the last price of any stock Finnhub didn't return this time (failed, or an unknown ticker),
+      // marked with when it was really fetched.
+      const stale: Record<string, number> = {};
       for (const t of tickerList) {
         const id = stockId(t);
-        if (!data[id] && last?.data[id]) data[id] = last.data[id];
+        if (data[id] || !last?.data[id]) continue;
+        data[id] = last.data[id];
+        stale[id] = last.stale?.[id] ?? last.fetchedAt;
       }
-      setPrices({ data, rates, fetchedAt: Date.now() });
+      const fetchedAt = Date.now();
+      setPrices(Object.keys(stale).length ? { data, rates, fetchedAt, stale } : { data, rates, fetchedAt });
       if (stockError) setError(stockError);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't update prices.");
@@ -190,7 +196,7 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
       cache &&
       FIATS.every((f) => cache.rates?.[f]) &&
       idList.every((id) => cache.data[id]) &&
-      tickerList.every((t) => cache.data[stockId(t)]);
+      tickerList.every((t) => cache.data[stockId(t)] && !cache.stale?.[stockId(t)]);
     if (!(fresh && complete)) refresh();
   }, [idList, tickerList, refresh]);
 
@@ -200,8 +206,11 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
   useEffect(() => {
     const check = () => {
       setTick((n) => n + 1);
-      const age = Date.now() - (pricesRef.current?.fetchedAt ?? 0);
-      if (document.visibilityState === "visible" && navigator.onLine && age > REFRESH_MS) {
+      const cache = pricesRef.current;
+      const age = Date.now() - (cache?.fetchedAt ?? 0);
+      // Stock prices left over from a failed fetch are retried sooner.
+      const due = age > (cache?.stale ? RETRY_MS : REFRESH_MS);
+      if (document.visibilityState === "visible" && navigator.onLine && due) {
         refreshRef.current();
       }
     };
@@ -472,17 +481,21 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
     );
   }
 
+  // The oldest price on screen, counting stock prices carried over from an earlier fetch.
+  const shownAt = prices && Math.min(prices.fetchedAt, ...Object.values(prices.stale ?? {}));
   let status: string;
   if (loading) status = "Updating prices…";
-  else if (error && prices) status = `${error} Showing prices from ${timeAgo(prices.fetchedAt)}.`;
+  else if (error && shownAt) status = `${error} Showing prices from ${timeAgo(shownAt)}.`;
   else if (error) status = error;
-  else if (!online && prices) status = `Offline. Showing prices from ${timeAgo(prices.fetchedAt)}.`;
+  else if (!online && shownAt) status = `Offline. Showing prices from ${timeAgo(shownAt)}.`;
   else if (!online) status = "Offline. Prices will load when you're back online.";
+  else if (prices?.stale && shownAt)
+    status = `Couldn't update some stock prices. Showing them from ${timeAgo(shownAt)}.`;
   else if (prices) status = `Prices updated ${timeAgo(prices.fetchedAt)}`;
   else status = "";
 
   // Prices on screen may be out of date: show a banner instead of the quiet status line.
-  const stale = !loading && (!online || !!error);
+  const stale = !loading && (!online || !!error || !!prices?.stale);
 
   const valued = rows.filter((r) => r.value);
   // Shares are hidden too: next to a coin's price they give away the amount held.

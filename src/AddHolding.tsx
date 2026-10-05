@@ -86,7 +86,7 @@ const MARKETS: Record<"crypto" | "stock", Market> = {
         detail: r.type === "Common Stock" ? "Stock" : r.type,
       })),
     quote: async (p, key, rates, signal) => {
-      const data = await fetchStockQuotes([p.symbol], key, signal);
+      const { data } = await fetchStockQuotes([p.symbol], key, signal);
       return (rates?.cop ? withCop(data, rates.cop) : data)[p.id];
     },
     label: "Stock or ETF",
