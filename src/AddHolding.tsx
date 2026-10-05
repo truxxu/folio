@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { fetchPrices, fetchStockQuotes, searchCoins, searchStocks, withCop } from "./api";
+import { fetchPrices, searchCoins, searchStocks } from "./api";
 import { formatMoney, parseAmount } from "./format";
 import { StockKeyForm } from "./StockKey";
 import { coinColor, Tile } from "./Tile";
@@ -85,10 +85,8 @@ const MARKETS: Record<"crypto" | "stock", Market> = {
         name: r.description,
         detail: r.type === "Common Stock" ? "Stock" : r.type,
       })),
-    quote: async (p, key, rates, signal) => {
-      const { data } = await fetchStockQuotes([p.symbol], key, signal);
-      return (rates?.cop ? withCop(data, rates.cop) : data)[p.id];
-    },
+    quote: async (p, key, rates, signal) =>
+      (await fetchPrices([], { tickers: [p.symbol], key }, rates, signal)).data[p.id],
     label: "Stock or ETF",
     placeholder: "Search by ticker or name, e.g. SPY",
     noun: "US stocks or ETFs",

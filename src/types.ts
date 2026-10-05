@@ -19,10 +19,11 @@ export interface Holding {
 export const kindOf = (h: Holding): HoldingKind => h.kind ?? "crypto";
 
 // Crypto is priced by CoinGecko, stocks by Finnhub (with the user's own key), cash and accounts by the fiat rates.
-export const isMarket = (h: Holding): boolean => kindOf(h) === "crypto";
+export const isCrypto = (h: Holding): boolean => kindOf(h) === "crypto";
 export const isStock = (h: Holding): boolean => kindOf(h) === "stock";
 export const isFiat = (h: Holding): boolean => kindOf(h) === "cash" || kindOf(h) === "account";
-export const stockId = (ticker: string) => `stock:${ticker}`;
+export const STOCK_PREFIX = "stock:";
+export const stockId = (ticker: string) => STOCK_PREFIX + ticker;
 
 export interface AppState {
   version: 1;
@@ -43,9 +44,9 @@ export interface PriceCache {
   data: PriceMap;
   rates?: Rates; // absent in caches saved before cash/accounts existed
   fetchedAt: number;
-  // Stock prices carried over from an earlier fetch because Finnhub failed, keyed by holding id, with
-  // when each was really fetched. They don't count as fresh, so they're retried.
-  stale?: Record<string, number>;
+  // Set when some stock prices were carried over from an earlier fetch because Finnhub failed: when the
+  // oldest of them was really fetched. The cache then doesn't count as fresh, so they're retried.
+  staleSince?: number;
 }
 
 export interface CoinSearchResult {
@@ -53,10 +54,4 @@ export interface CoinSearchResult {
   name: string;
   symbol: string;
   market_cap_rank: number | null;
-}
-
-export interface StockSearchResult {
-  symbol: string; // e.g. "AAPL"
-  description: string; // e.g. "APPLE INC"
-  type: string; // e.g. "Common Stock", "ETP"
 }

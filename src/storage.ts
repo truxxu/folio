@@ -1,5 +1,5 @@
 import { deriveKey, isSealed, ITERATIONS, newSalt, open, openWith, seal, sealWith, type Sealed } from "./crypto";
-import { FIATS, type AppState, type Fiat, type Holding, type PriceCache } from "./types";
+import { FIATS, STOCK_PREFIX, type AppState, type Fiat, type Holding, type PriceCache } from "./types";
 
 const STATE_KEY = "folio:state:v1";
 const PRICE_KEY = "folio:prices:v1";
@@ -35,7 +35,7 @@ function write(key: string, value: unknown) {
 // Stocks used to be tokenized stocks priced by CoinGecko, with the CoinGecko id as their id. Those are
 // dropped: stocks are now "stock:<TICKER>" and priced by Finnhub.
 const dropLegacyStocks = (holdings: Holding[]) =>
-  holdings.filter((h) => h.kind !== "stock" || h.id.startsWith("stock:"));
+  holdings.filter((h) => h.kind !== "stock" || h.id.startsWith(STOCK_PREFIX));
 
 const toState = (saved: AppState): AppState => ({ ...EMPTY, ...saved, holdings: dropLegacyStocks(saved.holdings) });
 

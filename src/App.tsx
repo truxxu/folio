@@ -36,7 +36,7 @@ import {
   requestPersistence,
   type Vault,
 } from "./storage";
-import { FIATS, isFiat, isMarket, isStock, kindOf, stockId, type AppState, type Currency, type Holding, type HoldingKind, type PriceCache } from "./types";
+import { FIATS, isCrypto, isFiat, isStock, kindOf, stockId, type AppState, type Currency, type Holding, type HoldingKind, type PriceCache } from "./types";
 import { holdingPrice } from "./value";
 
 const REFRESH_MS = 5 * 60_000;
@@ -56,8 +56,11 @@ const GROUPS: [HoldingKind, string][] = [
 // Short name for the allocation legend: the ticker or currency, or the account's own name.
 const label = (r: Row) => (kindOf(r) === "account" ? (r.name.length > 12 ? `${r.name.slice(0, 11)}…` : r.name) : r.symbol);
 
-// A stable string for a set of ids, so effects only re-run when the set itself changes.
-const joinSorted = (list: string[]) => [...list].sort().join(",");
+// The same array for as long as the set of values stays the same, so effects only re-run when it changes.
+function useStableList(list: string[]): string[] {
+  const joined = [...list].sort().join(",");
+  return useMemo(() => (joined ? joined.split(",") : []), [joined]);
+}
 
 type Session = { state: AppState; prices: PriceCache | null; vault: Vault | null };
 
@@ -146,13 +149,8 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
   // CoinGecko ids for crypto and tickers for stocks (Finnhub, only with a key); cash and accounts are
   // valued from the fiat rates fetched alongside.
   const key = state.finnhubKey;
-  const ids = useMemo(() => joinSorted(state.holdings.filter(isMarket).map((h) => h.id)), [state.holdings]);
-  const tickers = useMemo(
-    () => (key ? joinSorted(state.holdings.filter(isStock).map((h) => h.symbol)) : ""),
-    [state.holdings, key],
-  );
-  const idList = useMemo(() => (ids ? ids.split(",") : []), [ids]);
-  const tickerList = useMemo(() => (tickers ? tickers.split(",") : []), [tickers]);
+  const idList = useStableList(state.holdings.filter(isCrypto).map((h) => h.id));
+  const tickerList = useStableList(key ? state.holdings.filter(isStock).map((h) => h.symbol) : []);
   const hasHoldings = state.holdings.length > 0;
 
   const pricesRef = useRef(prices);
@@ -168,16 +166,16 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
       const stocks = key && tickerList.length ? { tickers: tickerList, key } : null;
       const { data, rates, stockError } = await fetchPrices(idList, stocks, last?.rates);
       // Keep the last price of any stock Finnhub didn't return this time (failed, or an unknown ticker),
-      // marked with when it was really fetched.
-      const stale: Record<string, number> = {};
+      // remembering when the oldest of them was really fetched.
+      let staleSince: number | undefined;
       for (const t of tickerList) {
         const id = stockId(t);
         if (data[id] || !last?.data[id]) continue;
         data[id] = last.data[id];
-        stale[id] = last.stale?.[id] ?? last.fetchedAt;
+        staleSince = Math.min(staleSince ?? Infinity, last.staleSince ?? last.fetchedAt);
       }
       const fetchedAt = Date.now();
-      setPrices(Object.keys(stale).length ? { data, rates, fetchedAt, stale } : { data, rates, fetchedAt });
+      setPrices(staleSince === undefined ? { data, rates, fetchedAt } : { data, rates, fetchedAt, staleSince });
       if (stockError) setError(stockError);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't update prices.");
@@ -196,7 +194,8 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
       cache &&
       FIATS.every((f) => cache.rates?.[f]) &&
       idList.every((id) => cache.data[id]) &&
-      tickerList.every((t) => cache.data[stockId(t)] && !cache.stale?.[stockId(t)]);
+      !cache.staleSince &&
+      tickerList.every((t) => cache.data[stockId(t)]);
     if (!(fresh && complete)) refresh();
   }, [idList, tickerList, refresh]);
 
@@ -209,7 +208,7 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
       const cache = pricesRef.current;
       const age = Date.now() - (cache?.fetchedAt ?? 0);
       // Stock prices left over from a failed fetch are retried sooner.
-      const due = age > (cache?.stale ? RETRY_MS : REFRESH_MS);
+      const due = age > (cache?.staleSince ? RETRY_MS : REFRESH_MS);
       if (document.visibilityState === "visible" && navigator.onLine && due) {
         refreshRef.current();
       }
@@ -423,15 +422,17 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
               onCancel={() => setSettingKey(false)}
             />
           ) : (
-            <button type="button" className="card-row" onClick={() => setSettingKey(true)}>
-              <span>{key ? "Change Finnhub API key" : "Set Finnhub API key"}</span>
-              <span className="mono muted">{key ? "On" : "Off"}</span>
-            </button>
-          )}
-          {key && !settingKey && (
-            <button type="button" className="card-row" onClick={() => setFinnhubKey(undefined)}>
-              <span>Remove key</span>
-            </button>
+            <>
+              <button type="button" className="card-row" onClick={() => setSettingKey(true)}>
+                <span>{key ? "Change Finnhub API key" : "Set Finnhub API key"}</span>
+                <span className="mono muted">{key ? "On" : "Off"}</span>
+              </button>
+              {key && (
+                <button type="button" className="card-row" onClick={() => setFinnhubKey(undefined)}>
+                  <span>Remove key</span>
+                </button>
+              )}
+            </>
           )}
         </div>
         <p className="note mono">
@@ -482,20 +483,20 @@ function Portfolio({ initial, onLock }: { initial: Session; onLock: () => void }
   }
 
   // The oldest price on screen, counting stock prices carried over from an earlier fetch.
-  const shownAt = prices && Math.min(prices.fetchedAt, ...Object.values(prices.stale ?? {}));
+  const shownAt = prices && (prices.staleSince ?? prices.fetchedAt);
   let status: string;
   if (loading) status = "Updating prices…";
   else if (error && shownAt) status = `${error} Showing prices from ${timeAgo(shownAt)}.`;
   else if (error) status = error;
   else if (!online && shownAt) status = `Offline. Showing prices from ${timeAgo(shownAt)}.`;
   else if (!online) status = "Offline. Prices will load when you're back online.";
-  else if (prices?.stale && shownAt)
+  else if (prices?.staleSince && shownAt)
     status = `Couldn't update some stock prices. Showing them from ${timeAgo(shownAt)}.`;
   else if (prices) status = `Prices updated ${timeAgo(prices.fetchedAt)}`;
   else status = "";
 
   // Prices on screen may be out of date: show a banner instead of the quiet status line.
-  const stale = !loading && (!online || !!error || !!prices?.stale);
+  const stale = !loading && (!online || !!error || !!prices?.staleSince);
 
   const valued = rows.filter((r) => r.value);
   // Shares are hidden too: next to a coin's price they give away the amount held.
